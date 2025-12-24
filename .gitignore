@@ -1,0 +1,23 @@
+# Runtime data - never commit
+data/
+*.db
+*.log
+
+# Screenshots contain sensitive info
+screenshots/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
