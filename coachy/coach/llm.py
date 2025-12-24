@@ -120,7 +120,7 @@ class AnthropicClient(LLMClient):
 
 
 class LocalLLMClient(LLMClient):
-    """Local LLM client for LM Studio, Ollama, etc."""
+    """Local LLM client for LM Studio, Ollama, MLX-LM, etc."""
     
     def __init__(self, endpoint: str, model: str):
         """Initialize local LLM client.
@@ -189,6 +189,97 @@ class LocalLLMClient(LLMClient):
             raise LLMError(f"Local LLM call failed: {e}") from e
 
 
+class MLXClient(LLMClient):
+    """MLX-LM client for Apple Silicon optimized local inference."""
+    
+    def __init__(self, model_path: str, max_tokens: int = 1500):
+        """Initialize MLX client.
+        
+        Args:
+            model_path: Path to MLX model directory
+            max_tokens: Maximum tokens to generate
+        """
+        self.model_path = model_path
+        self.max_tokens = max_tokens
+        
+        try:
+            import mlx_lm
+            self.mlx_lm = mlx_lm
+            # Test that model exists and loads
+            self._test_model()
+        except ImportError:
+            raise LLMError("MLX-LM not available. Install with: pip install mlx-lm")
+        except Exception as e:
+            raise LLMError(f"Failed to load MLX model from {model_path}: {e}")
+    
+    def _test_model(self):
+        """Test that the model can be loaded."""
+        try:
+            # Try to load model metadata to verify it exists
+            import os
+            if not os.path.exists(self.model_path):
+                raise FileNotFoundError(f"Model path does not exist: {self.model_path}")
+            
+            # Check for essential model files
+            config_file = os.path.join(self.model_path, "config.json")
+            if not os.path.exists(config_file):
+                raise FileNotFoundError(f"Model config not found: {config_file}")
+                
+        except Exception as e:
+            raise LLMError(f"MLX model validation failed: {e}")
+    
+    def generate_text(
+        self,
+        prompt: str,
+        max_tokens: int = 1500,
+        temperature: float = 0.7
+    ) -> Dict[str, Any]:
+        """Generate text using MLX-LM.
+        
+        Args:
+            prompt: Input prompt for text generation
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+            
+        Returns:
+            Dictionary with response content and usage info
+        """
+        try:
+            # Use mlx_lm.generate for direct generation
+            response = self.mlx_lm.generate(
+                model=self.model_path,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                temperature=temperature
+            )
+            
+            # MLX-LM returns a generator, get the response
+            if hasattr(response, '__iter__'):
+                content = "".join(response)
+            else:
+                content = str(response)
+            
+            # Estimate token usage (MLX-LM doesn't provide detailed usage stats)
+            estimated_input_tokens = estimate_tokens(prompt)
+            estimated_output_tokens = estimate_tokens(content)
+            
+            usage = {
+                "input_tokens": estimated_input_tokens,
+                "output_tokens": estimated_output_tokens,
+                "total_tokens": estimated_input_tokens + estimated_output_tokens
+            }
+            
+            logger.debug(f"MLX-LM generation completed: {usage['total_tokens']} estimated tokens")
+            
+            return {
+                "content": content,
+                "usage": usage
+            }
+            
+        except Exception as e:
+            raise LLMError(f"MLX-LM generation failed: {e}") from e
+
+
 def create_llm_client(config: Optional[Dict[str, Any]] = None) -> LLMClient:
     """Create appropriate LLM client based on configuration.
     
@@ -203,8 +294,9 @@ def create_llm_client(config: Optional[Dict[str, Any]] = None) -> LLMClient:
         config = {
             "provider": app_config.get("coach.llm_provider", "anthropic"),
             "anthropic_model": app_config.get("coach.anthropic.model", "claude-sonnet-4-20250514"),
-            "local_endpoint": app_config.get("coach.local_llm.endpoint", "http://localhost:1234/v1"),
-            "local_model": app_config.get("coach.local_llm.model", "gpt-3.5-turbo"),
+            "local_endpoint": app_config.get("coach.local_llm.endpoint", "http://localhost:8080/v1"),
+            "local_model": app_config.get("coach.local_llm.model", "gpt-oss-20b"),
+            "mlx_model_path": app_config.get("coach.mlx.model_path", "/Users/evan/Documents/ClaudeCode/models/gpt-oss-20b-mlx"),
         }
     
     provider = config.get("provider", "anthropic")
@@ -215,8 +307,12 @@ def create_llm_client(config: Optional[Dict[str, Any]] = None) -> LLMClient:
         )
     elif provider == "local":
         return LocalLLMClient(
-            endpoint=config.get("local_endpoint", "http://localhost:1234/v1"),
-            model=config.get("local_model", "gpt-3.5-turbo")
+            endpoint=config.get("local_endpoint", "http://localhost:8080/v1"),
+            model=config.get("local_model", "gpt-oss-20b")
+        )
+    elif provider == "mlx":
+        return MLXClient(
+            model_path=config.get("mlx_model_path", "/Users/evan/Documents/ClaudeCode/models/gpt-oss-20b-mlx")
         )
     else:
         raise LLMError(f"Unknown LLM provider: {provider}")
@@ -256,8 +352,12 @@ def test_llm_client(provider: str = "anthropic") -> bool:
             client = AnthropicClient()
         elif provider == "local":
             client = LocalLLMClient(
-                endpoint="http://localhost:1234/v1",
-                model="test-model"
+                endpoint="http://localhost:8080/v1",
+                model="gpt-oss-20b"
+            )
+        elif provider == "mlx":
+            client = MLXClient(
+                model_path="/Users/evan/Documents/ClaudeCode/models/gpt-oss-20b-mlx"
             )
         else:
             print(f"❌ Unknown provider: {provider}")

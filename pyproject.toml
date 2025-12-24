@@ -11,10 +11,13 @@ dependencies = [
     "pyobjc-framework-Vision>=10.0",  # macOS OCR
     "pyobjc-framework-AppKit>=10.0",  # macOS window info
     "pillow>=10.0",         # Image processing
-    "openai>=1.0",          # For local LLM (LM Studio uses OpenAI-compatible API)
+    "openai>=1.0",          # For local LLM (OpenAI-compatible API)
 ]
 
 [project.optional-dependencies]
+local = [
+    "mlx-lm>=0.17.0",       # MLX-LM for Apple Silicon optimization
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
