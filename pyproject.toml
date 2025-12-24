@@ -1,0 +1,36 @@
+[project]
+name = "coachy"
+version = "0.1.0"
+description = "Personal productivity coach"
+requires-python = ">=3.9"
+dependencies = [
+    "click>=8.1",           # CLI framework
+    "pyyaml>=6.0",          # Config parsing
+    "anthropic>=0.40",      # Anthropic API client
+    "pyobjc-framework-Quartz>=10.0",  # macOS screenshots
+    "pyobjc-framework-Vision>=10.0",  # macOS OCR
+    "pyobjc-framework-AppKit>=10.0",  # macOS window info
+    "pillow>=10.0",         # Image processing
+    "openai>=1.0",          # For local LLM (LM Studio uses OpenAI-compatible API)
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+coachy = "coachy.cli:cli"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "A", "C4", "T20"]
+ignore = ["ANN101", "ANN102"]  # Ignore self and cls annotations

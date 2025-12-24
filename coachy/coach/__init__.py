@@ -1,0 +1,1 @@
+"""Coaching subsystem for digest generation and LLM integration."""

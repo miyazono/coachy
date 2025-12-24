@@ -1,0 +1,1 @@
+"""Capture subsystem for screenshots and window detection."""
