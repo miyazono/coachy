@@ -43,9 +43,10 @@ def capture_screenshot(
     # Generate filename if not provided
     if output_path is None:
         timestamp = int(time.time() * 1000)  # milliseconds for uniqueness
-        output_path = f"screenshot_{timestamp}.jpg"
-    
-    output_path = pathlib.Path(output_path)
+        # Default to data/screenshots directory
+        output_path = pathlib.Path("data/screenshots") / f"screenshot_{timestamp}.jpg"
+    else:
+        output_path = pathlib.Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
     try:

@@ -37,9 +37,14 @@ processing:
 
 coach:
   default_persona: "grove"
-  llm_provider: "anthropic"
+  llm_provider: "anthropic"  # Options: "anthropic", "local", "mlx"
   anthropic:
     model: "claude-sonnet-4-20250514"
+  local_llm:
+    endpoint: "http://localhost:8080/v1"  # MLX server endpoint
+    model: "gpt-oss-20b"
+  mlx:
+    model_path: "/Users/evan/Documents/ClaudeCode/models/gpt-oss-20b-mlx"
   digest_format: "markdown"
 
 logging:

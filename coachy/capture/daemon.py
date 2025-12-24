@@ -223,6 +223,12 @@ class CaptureDaemon:
             logger.info("Coachy capture daemon stopped")
 
 
+def _run_daemon_process():
+    """Target function for daemon process."""
+    daemon = CaptureDaemon()
+    daemon.run()
+
+
 def start_daemon() -> None:
     """Start the capture daemon as a background process."""
     pid_file = pathlib.Path("data/coachy.pid")
@@ -245,15 +251,8 @@ def start_daemon() -> None:
             # Invalid PID file, remove it
             pid_file.unlink()
     
-    # Start daemon process
-    daemon = CaptureDaemon()
-    
-    def run_daemon():
-        """Target function for daemon process."""
-        daemon.run()
-    
     # Start as separate process
-    process = Process(target=run_daemon)
+    process = Process(target=_run_daemon_process)
     process.start()
     
     # Wait a moment to see if process started successfully
