@@ -318,9 +318,10 @@ class Database:
             
             productive_activities = []
             for row in cursor:
+                window_title = row[1] or ""
                 productive_activities.append({
                     "app": row[0],
-                    "context": row[1][:50] + "..." if len(row[1]) > 50 else row[1],
+                    "context": window_title[:50] + "..." if len(window_title) > 50 else window_title,
                     "category": row[2],
                     "minutes": row[3] // 60,
                     "sessions": row[4]

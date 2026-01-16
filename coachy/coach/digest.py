@@ -230,8 +230,12 @@ Please provide a {period_desc} coaching digest based on this data. Focus on:
 1. How well my actual time allocation matched my stated priorities
 2. Patterns in my activity that suggest strengths or areas for improvement
 3. Specific, actionable recommendations for tomorrow (if daily) or next week (if weekly)
+4. **Automation opportunities**: What repetitive tasks or patterns could/should be automated?
+5. **Delegate to Claude**: What specific tasks from my activity could I have Claude Code or Claude do instead?
+6. **Stop doing**: What activities should I eliminate or deprioritize entirely?
+7. **System improvements**: How could this productivity tracking/coaching system itself be improved based on what you see?
 
-Keep your response to 200-300 words. Be direct and specific in your coaching style as described above.
+Keep your response to 300-400 words. Be direct and specific in your coaching style as described above.
 
 Respond in markdown format suitable for display in a terminal."""
         
