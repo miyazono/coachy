@@ -129,30 +129,54 @@ def status():
 @click.option('--period', type=click.Choice(['day', 'week']), default='day', help='Period for digest (day or week)')
 @click.option('--coach', 'persona', default=None, help='Coach persona to use (default: grove)')
 @click.option('--date', default=None, help='Specific date (YYYY-MM-DD) or "yesterday"')
-def digest(period, persona, date):
-    """Generate a coaching digest."""
+@click.option('--archive', is_flag=True, help='Preserve screenshots after digest (default: delete them)')
+def digest(period, persona, date, archive):
+    """Generate a coaching digest.
+
+    By default, screenshots are deleted after the digest is generated to save space.
+    Use --archive to preserve them.
+    """
     try:
         # Import here to avoid import issues if dependencies not available
-        from .coach.digest import generate_digest
-        
+        from .coach.digest import DigestGenerator
+
+        config = get_config()
+
         # Use default persona if not specified
         if persona is None:
-            config = get_config()
             persona = config.get('coach.default_persona', 'grove')
-        
+
         click.echo(f"🤖 Generating {period} digest with {persona} coach...")
-        
+
+        # Create generator to access time range
+        generator = DigestGenerator()
+
+        # Get the time range for this digest
+        start_timestamp, end_timestamp = generator._get_time_range(period, date)
+
         # Generate digest
-        digest_content = generate_digest(
+        digest_content = generator.generate_digest(
             period=period,
             persona=persona,
             date=date
         )
-        
+
         click.echo("\n" + "="*60)
         click.echo(digest_content)
         click.echo("="*60)
-        
+
+        # Delete screenshots unless --archive flag is set
+        if not archive:
+            deleted_count = _cleanup_screenshots_for_period(
+                config.screenshots_path,
+                start_timestamp,
+                end_timestamp
+            )
+            if deleted_count > 0:
+                click.echo(f"\n🗑️  Cleaned up {deleted_count} screenshots (use --archive to preserve)")
+        else:
+            click.echo(f"\n📦 Screenshots archived (not deleted)")
+
     except ImportError as e:
         click.echo(f"✗ Missing dependencies for digest generation: {e}", err=True)
         click.echo("   Install with: pip install anthropic", err=True)
@@ -160,6 +184,42 @@ def digest(period, persona, date):
     except Exception as e:
         click.echo(f"✗ Digest generation failed: {e}", err=True)
         sys.exit(1)
+
+
+def _cleanup_screenshots_for_period(screenshots_path: str, start_ts: int, end_ts: int) -> int:
+    """Delete screenshots within the specified time period.
+
+    Args:
+        screenshots_path: Path to screenshots directory
+        start_ts: Start timestamp (Unix)
+        end_ts: End timestamp (Unix)
+
+    Returns:
+        Number of screenshots deleted
+    """
+    screenshots_dir = pathlib.Path(screenshots_path)
+    if not screenshots_dir.exists():
+        return 0
+
+    deleted_count = 0
+
+    for screenshot_file in screenshots_dir.glob("screenshot_*.jpg"):
+        try:
+            # Extract timestamp from filename (screenshot_1234567890123.jpg)
+            filename = screenshot_file.stem
+            ts_str = filename.replace("screenshot_", "")
+            file_ts = int(ts_str) // 1000  # Convert ms to seconds
+
+            # Check if within time range
+            if start_ts <= file_ts <= end_ts:
+                screenshot_file.unlink()
+                deleted_count += 1
+
+        except (ValueError, OSError) as e:
+            # Skip files that don't match expected pattern or can't be deleted
+            continue
+
+    return deleted_count
 
 
 @cli.command()

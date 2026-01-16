@@ -11,6 +11,7 @@ from ..config import get_config
 from ..storage.db import get_database
 from ..storage.models import ActivityEntry
 from ..process.pipeline import create_processor
+from ..process.diff import ActivityInference
 from .screenshot import capture_screenshot, ScreenshotError
 from .window import get_active_window, is_screen_locked
 
@@ -32,12 +33,13 @@ class CaptureDaemon:
         self.config = get_config()
         self.db = get_database(self.config.db_path)
         self.processor = create_processor()
+        self.activity_inference = ActivityInference()
         self.running = False
         self.pid_file = pathlib.Path("data/coachy.pid")
-        
+
         # Set up logging
         self._setup_logging()
-        
+
         # Create screenshots directory
         screenshots_dir = pathlib.Path(self.config.screenshots_path)
         screenshots_dir.mkdir(parents=True, exist_ok=True)
@@ -108,6 +110,8 @@ class CaptureDaemon:
             
             if mode == CaptureMode.LOCKED:
                 logger.debug("Screen locked, skipping capture")
+                # Reset inference state since user was away
+                self.activity_inference.reset()
                 time.sleep(self.config.capture_interval)
                 return
             
@@ -160,12 +164,30 @@ class CaptureDaemon:
                 if screenshot_path is None:
                     activity.metadata = activity.metadata or {}
                     activity.metadata.update({"screenshot_error": "Screenshot capture failed"})
-            
+
+            # Run activity inference by comparing with previous capture
+            inference_result = self.activity_inference.analyze(
+                current_ocr_text=activity.ocr_text,
+                current_app_name=window_info.app_name,
+                current_window_title=window_info.window_title
+            )
+
+            # Add inference results to activity metadata
+            activity.metadata = activity.metadata or {}
+            activity.metadata["inference"] = inference_result
+
+            # Adjust duration if user was idle (don't credit full interval)
+            if inference_result["activity_type"] == "idle" and inference_result["idle_duration_captures"] >= 3:
+                # User likely stepped away - don't count this as productive time
+                activity.metadata["adjusted_duration"] = 0
+                logger.debug(f"Idle detected ({inference_result['idle_duration_captures']} captures), zeroing duration")
+
             # Store processed activity in database
             activity_id = self.db.insert_activity(activity)
             logger.debug(
                 f"Activity logged: ID {activity_id}, app: {window_info.app_name}, "
-                f"category: {activity.category}, ocr_chars: {len(activity.ocr_text or '')}"
+                f"category: {activity.category}, inference: {inference_result['activity_type']}, "
+                f"change: {inference_result['change_ratio']:.1%}"
             )
             
         except Exception as e:
@@ -223,6 +245,12 @@ class CaptureDaemon:
             logger.info("Coachy capture daemon stopped")
 
 
+def _run_daemon_process():
+    """Target function for daemon process."""
+    daemon = CaptureDaemon()
+    daemon.run()
+
+
 def start_daemon() -> None:
     """Start the capture daemon as a background process."""
     pid_file = pathlib.Path("data/coachy.pid")
@@ -245,15 +273,8 @@ def start_daemon() -> None:
             # Invalid PID file, remove it
             pid_file.unlink()
     
-    # Start daemon process
-    daemon = CaptureDaemon()
-    
-    def run_daemon():
-        """Target function for daemon process."""
-        daemon.run()
-    
     # Start as separate process
-    process = Process(target=run_daemon)
+    process = Process(target=_run_daemon_process)
     process.start()
     
     # Wait a moment to see if process started successfully
