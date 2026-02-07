@@ -4,7 +4,7 @@
 Coachy is a local-first productivity monitoring and coaching system. It captures periodic screenshots, extracts activity context, and generates coaching digests using configurable AI personas.
 
 ## Key Design Constraints
-1. **Privacy-first**: All capture and processing happens locally. Only aggregated summaries go to external LLMs.
+1. **Privacy-first**: All capture and processing happens locally. Only aggregated summaries go to external LLMs (controlled by `privacy_level` setting). See PRIVACY.md.
 2. **Token-efficient**: Use local OCR/classification. Target <5k tokens/day for digests.
 3. **macOS-focused**: Use native frameworks (Vision, Quartz, AppKit) for performance.
 
@@ -43,8 +43,11 @@ coachy/
 │   ├── screenshots/          # Captured images
 │   ├── coachy.db            # SQLite database
 │   └── logs/                # Application logs
-├── config.yaml              # User configuration
-├── priorities.md            # User's current priorities
+├── config.yaml.example      # Example config (copied to config.yaml on first run)
+├── config.yaml              # User configuration (gitignored)
+├── priorities.md.example    # Example priorities template
+├── priorities.md            # User's current priorities (gitignored)
+├── PRIVACY.md               # Data flow and privacy documentation
 └── pyproject.toml           # Dependencies & build config
 ```
 
@@ -76,11 +79,18 @@ coachy/
 - CLI coaches command
 - Different coaching styles per persona
 
-### 🔲 Phase 5: Polish and Reliability (Next)
-- Retention policy cleanup
-- Comprehensive error handling
-- Edge case handling
-- Production-ready reliability
+### ✅ Phase 5: Polish, Reliability, and Privacy Hardening (Complete)
+- Configurable privacy levels (`private`/`detailed`) for API prompts
+- Personal files gitignored (config.yaml, priorities.md) with .example templates
+- File permissions (0o600) on database, screenshots, and logs
+- Log rotation (5MB, 3 backups) via RotatingFileHandler
+- Hourly auto-cleanup in daemon with WAL checkpoint
+- Startup validation (writable dirs, disk space check)
+- Tightened exception handling across daemon, window, and LLM modules
+- `wipe --confirm` command for full data deletion
+- Graceful double-stop handling
+- Fixed excluded_minutes query, Vision framework object cleanup
+- PRIVACY.md documenting full data flow
 
 ## CLI Commands
 
@@ -93,6 +103,7 @@ coachy/
 - `python3 -m coachy.cli digest` - Generate coaching digest
 - `python3 -m coachy.cli digest --coach huang` - Use specific coach
 - `python3 -m coachy.cli digest --period week` - Weekly digest
+- `python3 -m coachy.cli digest --privacy detailed` - Override privacy level
 - `python3 -m coachy.cli coaches` - List available coaches
 
 **Configuration:**
@@ -102,6 +113,7 @@ coachy/
 
 **Maintenance:**
 - `python3 -m coachy.cli cleanup` - Clean old data
+- `python3 -m coachy.cli wipe --confirm` - Delete ALL data (screenshots, DB, logs)
 - `python3 -m coachy.cli stats` - Detailed statistics
 
 **Testing:**
@@ -120,9 +132,10 @@ python3 test_phase4.py   # Coach personas tests
 
 ## When Making Changes
 - Maintain privacy-first design - no raw data to external services
+- Respect privacy levels: `private` mode must never send app names, window titles, or project context to the API
 - Keep persona prompts under 600 tokens each
 - Test capture daemon with short intervals (5s) during development
-- Don't commit anything in `data/`
+- Don't commit anything in `data/`, `config.yaml`, or `priorities.md`
 - Follow existing code patterns and conventions
 
 ## Known Limitations
