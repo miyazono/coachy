@@ -21,3 +21,6 @@ venv/
 .idea/
 .vscode/
 *.swp
+
+# Private personas (may reference living people)
+private-personas/

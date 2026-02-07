@@ -36,11 +36,9 @@ coachy/
 │       ├── llm.py          # Anthropic API client
 │       ├── priorities.py    # Priorities parser
 │       └── personas.py      # Coach persona manager
-├── personas/                 # Coach personality files
-│   ├── grove.md             # Andy Grove - High Output Management
-│   ├── huang.md             # Jensen Huang - Intensity & Vision
-│   ├── nielsen.md           # Michael Nielsen - Deep Work & Learning
-│   └── davidad.md           # davidad - Systems Thinking
+├── personas/                 # Public coach personality files
+│   └── grove.md             # Andy Grove - High Output Management (default)
+├── private-personas/         # Private personas (gitignored, loaded automatically)
 ├── data/                     # Runtime data (gitignored)
 │   ├── screenshots/          # Captured images
 │   ├── coachy.db            # SQLite database

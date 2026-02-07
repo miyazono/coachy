@@ -45,21 +45,26 @@ class PersonaManager:
     
     def __init__(self, personas_dir: str = "personas"):
         """Initialize persona manager.
-        
+
         Args:
             personas_dir: Directory containing persona markdown files
         """
         self.personas_dir = pathlib.Path(personas_dir)
+        self.private_personas_dir = self.personas_dir.parent / "private-personas"
         self._personas = {}
         self._load_all_personas()
     
     def _load_all_personas(self) -> None:
-        """Load all persona files from the personas directory."""
-        if not self.personas_dir.exists():
-            logger.warning(f"Personas directory not found: {self.personas_dir}")
-            return
-        
-        for persona_file in self.personas_dir.glob("*.md"):
+        """Load all persona files from personas and private-personas directories."""
+        dirs = [self.personas_dir, self.private_personas_dir]
+        for d in dirs:
+            if not d.exists():
+                continue
+            self._load_personas_from_dir(d)
+
+    def _load_personas_from_dir(self, directory: pathlib.Path) -> None:
+        """Load persona files from a single directory."""
+        for persona_file in directory.glob("*.md"):
             persona_name = persona_file.stem
             try:
                 with open(persona_file, 'r', encoding='utf-8') as f:

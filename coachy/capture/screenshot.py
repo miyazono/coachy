@@ -126,10 +126,12 @@ def _save_as_jpeg(image_ref, output_path: pathlib.Path, quality: int) -> None:
         
         # Save as JPEG with specified quality
         pil_image.save(str(output_path), "JPEG", quality=quality, optimize=True)
-        
+
     finally:
-        # Clean up Core Graphics objects
-        Quartz.CFRelease(image_ref)
+        # Note: Do NOT call CFRelease on image_ref - pyobjc manages
+        # reference counting automatically. Calling CFRelease causes
+        # a double-free crash (SIGSEGV/exit code 139).
+        pass
 
 
 def get_display_info() -> dict:
