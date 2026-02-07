@@ -82,8 +82,11 @@ def get_active_window() -> WindowInfo:
             process_id=process_id
         )
         
-    except Exception as e:
+    except (AttributeError, OSError) as e:
         logger.error(f"Failed to get active window info: {e}")
+        return WindowInfo()
+    except Exception as e:
+        logger.error(f"Unexpected error getting active window: {e}")
         return WindowInfo()
 
 

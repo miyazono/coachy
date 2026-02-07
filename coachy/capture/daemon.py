@@ -1,14 +1,17 @@
 """Background capture daemon for Coachy."""
 import logging
+import logging.handlers
 import os
 import pathlib
+import shutil
 import signal
 import sys
 import time
+from datetime import datetime, timedelta
 from multiprocessing import Process
 
 from ..config import get_config
-from ..storage.db import get_database
+from ..storage.db import get_database, DatabaseError
 from ..storage.models import ActivityEntry
 from ..process.pipeline import create_processor
 from ..process.diff import ActivityInference
@@ -28,6 +31,9 @@ class CaptureMode:
 class CaptureDaemon:
     """Background daemon for capturing screenshots and activity."""
     
+    # How often to run auto-cleanup (seconds)
+    CLEANUP_INTERVAL = 3600  # 1 hour
+
     def __init__(self):
         """Initialize capture daemon."""
         self.config = get_config()
@@ -36,6 +42,7 @@ class CaptureDaemon:
         self.activity_inference = ActivityInference()
         self.running = False
         self.pid_file = pathlib.Path("data/coachy.pid")
+        self._last_cleanup_time = 0.0
 
         # Set up logging
         self._setup_logging()
@@ -45,19 +52,34 @@ class CaptureDaemon:
         screenshots_dir.mkdir(parents=True, exist_ok=True)
     
     def _setup_logging(self) -> None:
-        """Configure logging for the daemon."""
+        """Configure logging for the daemon with log rotation."""
         log_file = pathlib.Path(self.config.log_file)
         log_file.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Configure root logger
-        logging.basicConfig(
-            level=getattr(logging, self.config.log_level),
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(log_file),
-                logging.StreamHandler()  # Also log to console
-            ]
+
+        # Configure root logger with rotating file handler
+        root_logger = logging.getLogger()
+        root_logger.setLevel(getattr(logging, self.config.log_level))
+
+        # Clear any existing handlers
+        root_logger.handlers.clear()
+
+        fmt = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+        # Rotating file handler: 5MB max, keep 3 backups
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file, maxBytes=5 * 1024 * 1024, backupCount=3
         )
+        file_handler.setFormatter(fmt)
+        root_logger.addHandler(file_handler)
+
+        # Console handler
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(fmt)
+        root_logger.addHandler(console_handler)
+
+        # Set owner-only permissions on log file
+        if log_file.exists():
+            os.chmod(log_file, 0o600)
     
     def _write_pid_file(self) -> None:
         """Write process ID to file."""
@@ -77,6 +99,63 @@ class CaptureDaemon:
         logger.info(f"Received signal {signum}, shutting down...")
         self.running = False
     
+    def _validate_startup(self) -> None:
+        """Validate environment before starting the capture loop."""
+        screenshots_dir = pathlib.Path(self.config.screenshots_path)
+
+        # Check screenshots directory is writable
+        test_file = screenshots_dir / ".write_test"
+        try:
+            test_file.touch()
+            test_file.unlink()
+        except OSError as e:
+            raise RuntimeError(f"Screenshots directory not writable: {screenshots_dir} ({e})")
+
+        # Check available disk space
+        disk_usage = shutil.disk_usage(str(screenshots_dir))
+        free_mb = disk_usage.free / (1024 * 1024)
+        if free_mb < 500:
+            logger.warning(f"Low disk space: {free_mb:.0f}MB free — cleanup may be needed")
+
+    def _run_auto_cleanup(self) -> None:
+        """Run periodic cleanup of old data."""
+        now = time.time()
+        if now - self._last_cleanup_time < self.CLEANUP_INTERVAL:
+            return
+
+        self._last_cleanup_time = now
+        retention_days = self.config.retention_days
+        cutoff = int(now - (retention_days * 24 * 60 * 60))
+
+        try:
+            # Clean database entries
+            deleted_entries = self.db.cleanup_old_activities(cutoff)
+
+            # Clean screenshot files
+            screenshots_dir = pathlib.Path(self.config.screenshots_path)
+            deleted_files = 0
+            if screenshots_dir.exists():
+                for screenshot_file in screenshots_dir.glob("screenshot_*.jpg"):
+                    try:
+                        ts_str = screenshot_file.stem.replace("screenshot_", "")
+                        file_ts = int(ts_str) / 1000
+                        if file_ts < cutoff:
+                            screenshot_file.unlink()
+                            deleted_files += 1
+                    except (ValueError, OSError):
+                        continue
+
+            # Checkpoint WAL to reclaim space
+            self.db.checkpoint()
+
+            if deleted_entries > 0 or deleted_files > 0:
+                logger.info(
+                    f"Auto-cleanup: removed {deleted_entries} DB entries, "
+                    f"{deleted_files} screenshots (retention: {retention_days} days)"
+                )
+        except Exception as e:
+            logger.warning(f"Auto-cleanup failed: {e}")
+
     def _determine_capture_mode(self, window_info) -> CaptureMode:
         """Determine capture mode based on current state.
         
@@ -190,32 +269,40 @@ class CaptureDaemon:
                 f"change: {inference_result['change_ratio']:.1%}"
             )
             
+        except (ScreenshotError, DatabaseError, OSError) as e:
+            logger.error(f"Capture cycle failed ({type(e).__name__}): {e}")
         except Exception as e:
-            logger.error(f"Capture cycle failed: {e}")
-    
+            logger.error(f"Capture cycle failed (unexpected): {e}", exc_info=True)
+
     def run(self) -> None:
         """Run the capture daemon."""
         if not self.config.capture_enabled:
             logger.error("Capture is disabled in configuration")
             return
-        
+
         logger.info("Starting Coachy capture daemon...")
-        
+
+        # Validate environment before starting
+        self._validate_startup()
+
         # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGTERM, self._signal_handler)
         signal.signal(signal.SIGINT, self._signal_handler)
-        
+
         # Write PID file
         self._write_pid_file()
-        
+
         self.running = True
-        
+
         try:
             logger.info(f"Capture started - interval: {self.config.capture_interval}s")
-            
+
             while self.running:
                 cycle_start = time.time()
-                
+
+                # Periodic cleanup
+                self._run_auto_cleanup()
+
                 # Perform capture cycle
                 self._capture_cycle()
                 

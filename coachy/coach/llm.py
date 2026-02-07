@@ -115,6 +115,8 @@ class AnthropicClient(LLMClient):
                 "usage": usage
             }
             
+        except anthropic.APIError as e:
+            raise LLMError(f"Anthropic API error: {e}") from e
         except Exception as e:
             raise LLMError(f"Anthropic API call failed: {e}") from e
 
@@ -185,6 +187,8 @@ class LocalLLMClient(LLMClient):
                 "usage": usage
             }
             
+        except (ConnectionError, TimeoutError) as e:
+            raise LLMError(f"Local LLM connection failed: {e}") from e
         except Exception as e:
             raise LLMError(f"Local LLM call failed: {e}") from e
 
@@ -296,7 +300,7 @@ def create_llm_client(config: Optional[Dict[str, Any]] = None) -> LLMClient:
             "anthropic_model": app_config.get("coach.anthropic.model", "claude-sonnet-4-20250514"),
             "local_endpoint": app_config.get("coach.local_llm.endpoint", "http://localhost:8080/v1"),
             "local_model": app_config.get("coach.local_llm.model", "gpt-oss-20b"),
-            "mlx_model_path": app_config.get("coach.mlx.model_path", "/Users/evan/Documents/ClaudeCode/models/gpt-oss-20b-mlx"),
+            "mlx_model_path": app_config.get("coach.mlx.model_path"),
         }
     
     provider = config.get("provider", "anthropic")
@@ -311,9 +315,10 @@ def create_llm_client(config: Optional[Dict[str, Any]] = None) -> LLMClient:
             model=config.get("local_model", "gpt-oss-20b")
         )
     elif provider == "mlx":
-        return MLXClient(
-            model_path=config.get("mlx_model_path", "/Users/evan/Documents/ClaudeCode/models/gpt-oss-20b-mlx")
-        )
+        model_path = config.get("mlx_model_path")
+        if not model_path:
+            raise LLMError("MLX model_path not configured. Set coach.mlx.model_path in config.yaml")
+        return MLXClient(model_path=model_path)
     else:
         raise LLMError(f"Unknown LLM provider: {provider}")
 
@@ -356,9 +361,12 @@ def test_llm_client(provider: str = "anthropic") -> bool:
                 model="gpt-oss-20b"
             )
         elif provider == "mlx":
-            client = MLXClient(
-                model_path="/Users/evan/Documents/ClaudeCode/models/gpt-oss-20b-mlx"
-            )
+            app_config = get_config()
+            mlx_path = app_config.get("coach.mlx.model_path")
+            if not mlx_path:
+                print("MLX model_path not configured in config.yaml")
+                return False
+            client = MLXClient(model_path=mlx_path)
         else:
             print(f"❌ Unknown provider: {provider}")
             return False

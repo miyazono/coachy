@@ -1,5 +1,6 @@
 """Screenshot capture using macOS Quartz framework."""
 import logging
+import os
 import pathlib
 import time
 from typing import Optional
@@ -126,6 +127,9 @@ def _save_as_jpeg(image_ref, output_path: pathlib.Path, quality: int) -> None:
         
         # Save as JPEG with specified quality
         pil_image.save(str(output_path), "JPEG", quality=quality, optimize=True)
+
+        # Set owner-only permissions on screenshot
+        os.chmod(str(output_path), 0o600)
 
     finally:
         # Note: Do NOT call CFRelease on image_ref - pyobjc manages

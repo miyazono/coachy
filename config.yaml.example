@@ -1,0 +1,53 @@
+capture:
+  enabled: true
+  interval_seconds: 60
+  monitors: "primary"
+
+  excluded_apps:
+    - "1Password"
+    - "Bitwarden"
+    - "LastPass"
+    - "Keychain Access"
+    - "Zoom"
+    - "Google Meet"
+    - "Microsoft Teams"
+    - "Webex"
+    - "FaceTime"
+    - "Slack Huddle"
+    - "Discord"  # when in voice/video
+
+  excluded_titles:
+    - "private"
+    - "incognito"
+    - "Private Browsing"
+
+storage:
+  retention_days: 30
+  db_path: "data/coachy.db"
+  screenshots_path: "data/screenshots"
+
+processing:
+  ocr_enabled: true
+  classifier_backend: "rules"
+  local_llm:
+    enabled: false
+    provider: "lmstudio"
+    model: "phi-3-mini"
+    endpoint: "http://localhost:1234/v1"
+
+coach:
+  default_persona: "grove"
+  privacy_level: "private"  # Options: "private" (categories only), "detailed" (app names + window titles)
+  llm_provider: "anthropic"  # Options: "anthropic", "local", "mlx"
+  anthropic:
+    model: "claude-sonnet-4-20250514"
+  local_llm:
+    endpoint: "http://localhost:8080/v1"
+    model: "your-model-name"
+  mlx:
+    model_path: "/path/to/your/mlx/model"
+  digest_format: "markdown"
+
+logging:
+  level: "INFO"
+  file: "data/logs/coachy.log"

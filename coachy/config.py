@@ -1,8 +1,12 @@
 """Configuration management for Coachy."""
+import logging
 import os
 import pathlib
+import shutil
 from typing import Any, Dict, List
 import yaml
+
+logger = logging.getLogger(__name__)
 
 
 class Config:
@@ -19,16 +23,25 @@ class Config:
         self._ensure_data_directories()
     
     def _load_config(self) -> Dict[str, Any]:
-        """Load configuration from YAML file."""
+        """Load configuration from YAML file.
+
+        If config.yaml doesn't exist but config.yaml.example does,
+        copies the example as a starting point.
+        """
         if not self.config_path.exists():
-            raise FileNotFoundError(f"Configuration file not found: {self.config_path}")
-        
+            example_path = self.config_path.parent / (self.config_path.name + '.example')
+            if example_path.exists():
+                shutil.copy2(str(example_path), str(self.config_path))
+                logger.info(f"Created {self.config_path} from {example_path}")
+            else:
+                raise FileNotFoundError(f"Configuration file not found: {self.config_path}")
+
         with open(self.config_path, 'r') as f:
             config = yaml.safe_load(f)
-        
+
         if config is None:
             raise ValueError(f"Invalid or empty configuration file: {self.config_path}")
-            
+
         return config
     
     def _ensure_data_directories(self) -> None:
@@ -112,6 +125,15 @@ class Config:
     def log_level(self) -> str:
         """Log level."""
         return self.get('logging.level', 'INFO')
+
+    @property
+    def privacy_level(self) -> str:
+        """Privacy level for API prompts: 'private' or 'detailed'."""
+        level = self.get('coach.privacy_level', 'private')
+        if level not in ('private', 'detailed'):
+            logger.warning(f"Unknown privacy_level '{level}', defaulting to 'private'")
+            return 'private'
+        return level
 
 
 # Global configuration instance

@@ -1,5 +1,6 @@
 """SQLite database operations for Coachy."""
 import logging
+import os
 import pathlib
 import sqlite3
 import threading
@@ -62,6 +63,9 @@ class Database:
         try:
             with self.transaction() as conn:
                 conn.executescript(SCHEMA_SQL)
+            # Set owner-only permissions on database file
+            if self.db_path.exists():
+                os.chmod(self.db_path, 0o600)
             logger.info(f"Database initialized: {self.db_path}")
         except sqlite3.Error as e:
             raise DatabaseError(f"Failed to initialize database: {e}") from e
@@ -223,13 +227,25 @@ class Database:
             # Top productive activities
             productive_activities = self._get_productive_activities(conn, start_timestamp, end_timestamp)
             
+            # Query excluded time
+            excluded_cursor = conn.execute(
+                """
+                SELECT COALESCE(SUM(duration_seconds), 0) / 60
+                FROM activity_log
+                WHERE timestamp >= ? AND timestamp <= ?
+                AND metadata LIKE '%"excluded": true%'
+                """,
+                (start_timestamp, end_timestamp)
+            )
+            excluded_minutes = excluded_cursor.fetchone()[0] or 0
+
             return {
                 "total_tracked_minutes": total_minutes,
                 "by_category": by_category,
                 "by_app": by_app,
                 "timeline": timeline,
                 "productive_activities": productive_activities,
-                "excluded_minutes": 0  # TODO: track excluded time
+                "excluded_minutes": excluded_minutes
             }
             
         except sqlite3.Error as e:
@@ -446,6 +462,15 @@ class Database:
         except sqlite3.Error as e:
             raise DatabaseError(f"Failed to get database stats: {e}") from e
     
+    def checkpoint(self) -> None:
+        """Run WAL checkpoint to reclaim space."""
+        try:
+            conn = self._get_connection()
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            logger.debug("WAL checkpoint completed")
+        except sqlite3.Error as e:
+            logger.warning(f"WAL checkpoint failed: {e}")
+
     def close(self) -> None:
         """Close database connections."""
         if hasattr(self._local, 'connection'):

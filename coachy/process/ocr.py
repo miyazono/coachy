@@ -39,55 +39,65 @@ def extract_text_from_image(image_path: str, max_chars: int = 2000) -> str:
     if not image_path.exists():
         raise OCRError(f"Image file not found: {image_path}")
     
+    handler = None
+    request = None
+    cg_image = None
+    image_source = None
+
     try:
         # Load image
         image_url = NSURL.fileURLWithPath_(str(image_path))
-        
+
         # Create CGImage from file
         image_source = Quartz.CGImageSourceCreateWithURL(image_url, None)
         if not image_source:
             raise OCRError("Failed to create image source")
-        
+
         cg_image = Quartz.CGImageSourceCreateImageAtIndex(image_source, 0, None)
         if not cg_image:
             raise OCRError("Failed to create CGImage")
-        
+
         # Create Vision request
         request = Vision.VNRecognizeTextRequest.new()
-        
+
         # Configure for better accuracy vs speed
         request.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
         request.setUsesLanguageCorrection_(True)
-        
+
         # Create request handler and perform OCR
         handler = Vision.VNImageRequestHandler.alloc().initWithCGImage_options_(cg_image, {})
-        
+
         success = handler.performRequests_error_([request], None)
         if not success[0]:
             raise OCRError("Vision text recognition failed")
-        
+
         # Extract text from results
         text_lines = []
         results = request.results()
-        
+
         if results:
             for result in results:
                 if hasattr(result, 'text'):
                     text_lines.append(result.text())
-        
+
         # Join all text and truncate if necessary
         full_text = '\n'.join(text_lines)
-        
+
         if len(full_text) > max_chars:
             truncated_text = full_text[:max_chars] + "..."
             logger.debug(f"OCR text truncated from {len(full_text)} to {max_chars} chars")
             return truncated_text
-        
+
         logger.debug(f"OCR extracted {len(full_text)} characters")
         return full_text
-        
+
+    except OCRError:
+        raise
     except Exception as e:
         raise OCRError(f"Text extraction failed: {e}") from e
+    finally:
+        # Explicit cleanup to help GC in long-running daemon
+        del handler, request, cg_image, image_source
 
 
 def extract_text_from_screenshot(screenshot_path: str, max_chars: int = 2000) -> str:

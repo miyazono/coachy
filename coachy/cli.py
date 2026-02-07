@@ -44,8 +44,12 @@ def stop():
         daemon.stop_daemon()
         click.echo("✓ Coachy capture stopped.")
     except RuntimeError as e:
-        click.echo(f"✗ Failed to stop: {e}", err=True)
-        sys.exit(1)
+        msg = str(e)
+        if "not running" in msg.lower() or "no pid file" in msg.lower():
+            click.echo("Coachy is not running.")
+        else:
+            click.echo(f"✗ Failed to stop: {e}", err=True)
+            sys.exit(1)
     except Exception as e:
         click.echo(f"✗ Unexpected error: {e}", err=True)
         sys.exit(1)
@@ -130,11 +134,16 @@ def status():
 @click.option('--coach', 'persona', default=None, help='Coach persona to use (default: grove)')
 @click.option('--date', default=None, help='Specific date (YYYY-MM-DD) or "yesterday"')
 @click.option('--archive', is_flag=True, help='Preserve screenshots after digest (default: delete them)')
-def digest(period, persona, date, archive):
+@click.option('--privacy', type=click.Choice(['private', 'detailed']), default=None, help='Privacy level for API prompt (default: from config)')
+def digest(period, persona, date, archive, privacy):
     """Generate a coaching digest.
 
     By default, screenshots are deleted after the digest is generated to save space.
     Use --archive to preserve them.
+
+    Privacy levels control what gets sent to the LLM API:
+      private  — categories and time only (no app names or window titles)
+      detailed — full context including app names and window titles
     """
     try:
         # Import here to avoid import issues if dependencies not available
@@ -146,7 +155,8 @@ def digest(period, persona, date, archive):
         if persona is None:
             persona = config.get('coach.default_persona', 'grove')
 
-        click.echo(f"🤖 Generating {period} digest with {persona} coach...")
+        privacy_label = privacy or config.privacy_level
+        click.echo(f"🤖 Generating {period} digest with {persona} coach (privacy: {privacy_label})...")
 
         # Create generator to access time range
         generator = DigestGenerator()
@@ -158,7 +168,8 @@ def digest(period, persona, date, archive):
         digest_content = generator.generate_digest(
             period=period,
             persona=persona,
-            date=date
+            date=date,
+            privacy_level=privacy
         )
 
         click.echo("\n" + "="*60)
@@ -226,11 +237,17 @@ def _cleanup_screenshots_for_period(screenshots_path: str, start_ts: int, end_ts
 def configure():
     """Edit configuration file."""
     config_path = pathlib.Path("config.yaml")
-    
+    example_path = pathlib.Path("config.yaml.example")
+
     if not config_path.exists():
-        click.echo(f"Configuration file not found: {config_path}")
-        return
-    
+        if example_path.exists():
+            import shutil
+            shutil.copy2(str(example_path), str(config_path))
+            click.echo(f"Created {config_path} from {example_path}")
+        else:
+            click.echo(f"Configuration file not found: {config_path}")
+            return
+
     click.edit(filename=str(config_path))
     click.echo("Configuration edited. Restart daemon for changes to take effect.")
 
@@ -306,6 +323,60 @@ def cleanup(days):
         
     except Exception as e:
         click.echo(f"✗ Cleanup failed: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.option('--confirm', is_flag=True, help='Required flag to confirm data deletion')
+def wipe(confirm):
+    """Delete ALL captured data (screenshots, database, logs).
+
+    Requires --confirm flag to prevent accidental data loss.
+    """
+    if not confirm:
+        click.echo("This will permanently delete all Coachy data:")
+        click.echo("  - All screenshots")
+        click.echo("  - Activity database")
+        click.echo("  - Log files")
+        click.echo("")
+        click.echo("Run with --confirm to proceed: coachy wipe --confirm")
+        return
+
+    try:
+        config = get_config()
+
+        deleted_screenshots = 0
+        freed_bytes = 0
+
+        # Delete screenshots
+        screenshots_dir = pathlib.Path(config.screenshots_path)
+        if screenshots_dir.exists():
+            for f in screenshots_dir.glob("*.jpg"):
+                freed_bytes += f.stat().st_size
+                f.unlink()
+                deleted_screenshots += 1
+
+        # Delete database
+        db_path = pathlib.Path(config.db_path)
+        for suffix in ("", "-wal", "-shm"):
+            p = pathlib.Path(str(db_path) + suffix)
+            if p.exists():
+                freed_bytes += p.stat().st_size
+                p.unlink()
+
+        # Delete logs
+        log_path = pathlib.Path(config.log_file)
+        if log_path.parent.exists():
+            for f in log_path.parent.glob("*.log*"):
+                freed_bytes += f.stat().st_size
+                f.unlink()
+
+        click.echo("✓ All data wiped.")
+        click.echo(f"  Screenshots deleted: {deleted_screenshots}")
+        click.echo(f"  Space freed: {freed_bytes / 1024 / 1024:.1f} MB")
+
+    except Exception as e:
+        click.echo(f"✗ Wipe failed: {e}", err=True)
         sys.exit(1)
 
 

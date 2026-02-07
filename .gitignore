@@ -6,6 +6,10 @@ data/
 # Screenshots contain sensitive info
 screenshots/
 
+# Personal config and priorities (contain real names, paths, preferences)
+config.yaml
+priorities.md
+
 # Python
 __pycache__/
 *.pyc

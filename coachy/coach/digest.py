@@ -28,6 +28,7 @@ class DigestGenerator:
         self.config = get_config()
         self.db = get_database(self.config.db_path)
         self.llm_client = None  # Lazy-loaded
+        self._privacy_level_override = None
     
     def _get_llm_client(self):
         """Get LLM client, creating it if needed."""
@@ -39,18 +40,21 @@ class DigestGenerator:
         self,
         period: str = "day",
         persona: str = "grove",
-        date: Optional[str] = None
+        date: Optional[str] = None,
+        privacy_level: Optional[str] = None
     ) -> str:
         """Generate a coaching digest for the specified period.
-        
+
         Args:
             period: "day" or "week"
             persona: Coach persona name
             date: Specific date (YYYY-MM-DD) or None for most recent period
-            
+            privacy_level: Override config privacy level ("private" or "detailed")
+
         Returns:
             Generated digest text
         """
+        self._privacy_level_override = privacy_level
         try:
             # Validate persona
             if not validate_persona_name(persona):
@@ -207,8 +211,9 @@ class DigestGenerator:
         Returns:
             Complete prompt for LLM
         """
-        # Format activity data for prompt
-        activity_text = self._format_activity_for_prompt(activity_summary)
+        # Format activity data for prompt with privacy level
+        privacy_level = self._privacy_level_override or self.config.privacy_level
+        activity_text = self._format_activity_for_prompt(activity_summary, privacy_level=privacy_level)
         
         # Format priorities
         priorities_text = format_priorities_for_llm(priorities)
@@ -241,87 +246,105 @@ Respond in markdown format suitable for display in a terminal."""
         
         return prompt
     
-    def _format_activity_for_prompt(self, activity_summary: Dict[str, Any]) -> str:
+    def _format_activity_for_prompt(
+        self,
+        activity_summary: Dict[str, Any],
+        privacy_level: str = "private"
+    ) -> str:
         """Format activity summary for inclusion in LLM prompt.
-        
+
         Args:
             activity_summary: Activity data from database
-            
+            privacy_level: "private" (categories only) or "detailed" (full context)
+
         Returns:
             Formatted text for prompt
         """
         total_minutes = activity_summary.get("total_tracked_minutes", 0)
-        
+
         if total_minutes == 0:
             return "No activity data available for this period."
-        
-        # Format category breakdown
+
+        # Category breakdown — always included
         categories = activity_summary.get("by_category", {})
         category_text = []
         for category, data in sorted(categories.items(), key=lambda x: x[1]["minutes"], reverse=True):
             minutes = data["minutes"]
             percentage = data["percentage"]
             category_text.append(f"- {category}: {minutes} minutes ({percentage:.1f}%)")
-        
-        # Format top apps
-        apps = activity_summary.get("by_app", {})
-        app_text = []
-        for app, data in sorted(apps.items(), key=lambda x: x[1]["minutes"], reverse=True)[:5]:
-            minutes = data["minutes"]
-            category = data["category"]
-            app_text.append(f"- {app}: {minutes} minutes ({category})")
-        
-        # Format productive activities
-        productive = activity_summary.get("productive_activities", [])
-        productive_text = []
-        for activity in productive[:3]:  # Top 3
-            app = activity["app"]
-            context = activity["context"]
-            minutes = activity["minutes"]
-            productive_text.append(f"- {app} ({context}): {minutes} minutes")
-        
-        # Format timeline (hours with significant activity)
+
+        # Timeline — always included, but detail varies by privacy level
         timeline = activity_summary.get("timeline", [])
-        active_hours = [
-            f"{hour['hour']:02d}:00 ({hour['primary_category']}, {hour['total_minutes']}min)"
-            for hour in timeline
-            if hour["total_minutes"] >= 30  # Only show hours with 30+ minutes
-        ]
-        
+        if privacy_level == "private":
+            active_hours = [
+                f"{hour['hour']:02d}:00 ({hour['primary_category']}, {hour['total_minutes']}min)"
+                for hour in timeline
+                if hour["total_minutes"] >= 30
+            ]
+        else:
+            active_hours = [
+                f"{hour['hour']:02d}:00 ({hour['primary_category']}, {hour['total_minutes']}min)"
+                for hour in timeline
+                if hour["total_minutes"] >= 30
+            ]
+
         result = f"""**Total Tracked Time:** {total_minutes} minutes ({total_minutes // 60}h {total_minutes % 60}m)
 
 **Time by Category:**
-{chr(10).join(category_text) if category_text else "No categorized activity"}
+{chr(10).join(category_text) if category_text else "No categorized activity"}"""
+
+        # Detailed mode: include app names, window titles, productive sessions
+        if privacy_level == "detailed":
+            apps = activity_summary.get("by_app", {})
+            app_text = []
+            for app, data in sorted(apps.items(), key=lambda x: x[1]["minutes"], reverse=True)[:5]:
+                minutes = data["minutes"]
+                category = data["category"]
+                app_text.append(f"- {app}: {minutes} minutes ({category})")
+
+            productive = activity_summary.get("productive_activities", [])
+            productive_text = []
+            for activity in productive[:3]:
+                app = activity["app"]
+                context = activity["context"]
+                minutes = activity["minutes"]
+                productive_text.append(f"- {app} ({context}): {minutes} minutes")
+
+            result += f"""
 
 **Top Applications:**
 {chr(10).join(app_text) if app_text else "No application data"}
 
 **Most Productive Sessions:**
-{chr(10).join(productive_text) if productive_text else "No significant productive sessions"}
+{chr(10).join(productive_text) if productive_text else "No significant productive sessions"}"""
+
+        result += f"""
 
 **Active Hours:**
 {', '.join(active_hours) if active_hours else "No significant activity periods"}"""
-        
+
         return result
 
 
 def generate_digest(
     period: str = "day",
     persona: str = "grove",
-    date: Optional[str] = None
+    date: Optional[str] = None,
+    privacy_level: Optional[str] = None
 ) -> str:
     """Convenience function to generate a digest.
-    
+
     Args:
         period: "day" or "week"
         persona: Coach persona name
         date: Specific date or None
-        
+        privacy_level: Override config privacy level ("private" or "detailed")
+
     Returns:
         Generated digest content
     """
     generator = DigestGenerator()
-    return generator.generate_digest(period, persona, date)
+    return generator.generate_digest(period, persona, date, privacy_level=privacy_level)
 
 
 if __name__ == "__main__":
