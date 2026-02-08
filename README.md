@@ -22,7 +22,7 @@ Coachy is a local-first productivity monitoring and coaching system that helps y
 
 1. **Clone the repository:**
 ```bash
-git clone https://github.com/yourusername/coachy.git
+git clone https://github.com/miyazono/coachy.git
 cd coachy
 ```
 
@@ -76,19 +76,15 @@ python3 -m coachy.cli stop
 
 4. **Try different coaches** for varied perspectives:
    ```bash
-   python3 -m coachy.cli digest --coach huang   # Jensen Huang - intensity focus
-   python3 -m coachy.cli digest --coach nielsen  # Michael Nielsen - deep work
-   python3 -m coachy.cli digest --coach davidad  # davidad - systems thinking
+   python3 -m coachy.cli coaches              # List available coaches
+   python3 -m coachy.cli digest --coach grove  # Use a specific coach
    ```
 
 ## Available Coaches
 
-Run `python3 -m coachy.cli coaches` to see all available coaches:
+Run `python3 -m coachy.cli coaches` to see all available coaches.
 
-- **Andy Grove** (default): High output management, leverage thinking
-- **Jensen Huang**: Intensity, vision, 10x thinking
-- **Michael Nielsen**: Deep work, learning, tools for thought
-- **davidad**: Systems thinking, leverage points, urgency
+The default coach is **Andy Grove** (high output management, leverage thinking). You can add custom personas by placing markdown files in `personas/` or `private-personas/` (gitignored) — see `personas/grove.md` for the format.
 
 ## Commands
 
