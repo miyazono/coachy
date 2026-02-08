@@ -23,9 +23,11 @@ coachy/
 │   ├── capture/              # Screenshot & window detection
 │   │   ├── daemon.py         # Background capture process
 │   │   ├── screenshot.py     # Quartz-based capture
-│   │   └── window.py         # AppKit window detection
+│   │   ├── window.py         # AppKit window detection
+│   │   └── windows.py        # CGWindowList visible window enumeration
 │   ├── process/              # Activity processing
-│   │   ├── ocr.py           # Vision framework OCR
+│   │   ├── ocr.py           # Vision framework OCR (flat + bounding-box)
+│   │   ├── spatial.py        # Map OCR blocks to windows
 │   │   ├── classifier.py     # Rules-based categorization
 │   │   └── pipeline.py       # Processing orchestration
 │   ├── storage/              # Data persistence
@@ -88,6 +90,16 @@ coachy/
 - Startup validation (writable dirs, disk space check)
 - Tightened exception handling across daemon, window, and LLM modules
 - `wipe --confirm` command for full data deletion
+
+### ✅ Phase 6: Spatial Window-Aware OCR (Complete)
+- Window enumeration via CGWindowListCopyWindowInfo (`coachy/capture/windows.py`)
+- Bounding-box OCR preserving Vision coordinates (`extract_text_blocks()` in `ocr.py`)
+- Spatial mapping of OCR blocks to windows (`coachy/process/spatial.py`)
+- Pipeline integration with fallback to basic OCR (`pipeline.py`)
+- Per-window change detection in diff engine (`diff.py`)
+- Workspace context (layouts, focus patterns, reference materials) in digests
+- Window metadata stored in `activity_log.metadata["windows"]`
+- 15 unit tests covering coordinate math, window matching, and serialization
 - Graceful double-stop handling
 - Fixed excluded_minutes query, Vision framework object cleanup
 - PRIVACY.md documenting full data flow
@@ -128,6 +140,7 @@ python3 test_basic.py    # Phase 1 foundation tests
 python3 test_phase2.py   # Processing pipeline tests
 python3 test_phase3.py   # Digest generation tests
 python3 test_phase4.py   # Coach personas tests
+python3 -m unittest test_spatial -v  # Phase 6 spatial OCR tests
 ```
 
 ## When Making Changes

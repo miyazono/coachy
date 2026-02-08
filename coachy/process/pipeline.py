@@ -1,14 +1,17 @@
 """Processing pipeline orchestration for screenshots and activities."""
 import logging
 import time
-from typing import Optional, Dict, Any
+from typing import List, Optional, Dict, Any
 
 from ..config import get_config
 from ..storage.models import ActivityEntry
-from .ocr import extract_text_from_screenshot, OCRError
+from .ocr import extract_text_from_screenshot, extract_text_blocks, OCRError
 from .classifier import ActivityClassifier, ClassifierError
 
 logger = logging.getLogger(__name__)
+
+# Abort spatial OCR if it takes longer than this (seconds)
+_SPATIAL_TIMEOUT = 10.0
 
 
 class ProcessingError(Exception):
@@ -32,34 +35,56 @@ class ActivityProcessor:
         app_name: Optional[str],
         window_title: Optional[str],
         screenshot_path: Optional[str],
-        duration_seconds: int = 60
+        duration_seconds: int = 60,
+        focused_pid: Optional[int] = None,
     ) -> ActivityEntry:
         """Process a captured activity through the full pipeline.
-        
+
         Args:
             app_name: Name of the active application
             window_title: Title of the active window
             screenshot_path: Path to screenshot file (optional)
             duration_seconds: Duration to attribute to this activity
-            
+            focused_pid: PID of the focused application (for spatial OCR)
+
         Returns:
             Processed ActivityEntry ready for database storage
         """
         start_time = time.time()
-        processing_metadata = {}
-        
+        processing_metadata: Dict[str, Any] = {}
+
         try:
-            # Step 1: Extract text from screenshot (if available and enabled)
+            # Step 1: Extract text — try spatial OCR first, fall back to basic
             ocr_text = None
+            window_results = None
             if screenshot_path and self.ocr_enabled:
-                ocr_text = self._extract_text(screenshot_path, processing_metadata)
-            
+                window_results = self._extract_window_context(
+                    screenshot_path, focused_pid, processing_metadata
+                )
+                if window_results is not None:
+                    # Combine per-window texts for backward-compat classifier/diff
+                    ocr_text = "\n".join(
+                        r.ocr_text for r in window_results if r.ocr_text
+                    ) or None
+                else:
+                    # Fallback to basic OCR
+                    ocr_text = self._extract_text(screenshot_path, processing_metadata)
+
             # Step 2: Classify the activity
             category = self._classify_activity(
                 app_name, window_title, ocr_text, processing_metadata
             )
-            
+
             # Step 3: Create activity entry with processed data
+            entry_metadata: Dict[str, Any] = {
+                "processing": processing_metadata,
+                "processing_time_ms": int((time.time() - start_time) * 1000),
+            }
+            if window_results is not None:
+                entry_metadata["windows"] = [
+                    r.to_metadata_dict() for r in window_results
+                ]
+
             activity = ActivityEntry.create_now(
                 app_name=app_name,
                 window_title=window_title,
@@ -67,24 +92,22 @@ class ActivityProcessor:
                 ocr_text=ocr_text,
                 screenshot_path=screenshot_path,
                 duration_seconds=duration_seconds,
-                metadata={
-                    "processing": processing_metadata,
-                    "processing_time_ms": int((time.time() - start_time) * 1000)
-                }
+                metadata=entry_metadata,
             )
-            
+
             logger.debug(
                 f"Processed activity: app={app_name}, category={category}, "
                 f"ocr_chars={len(ocr_text) if ocr_text else 0}, "
+                f"windows={len(window_results) if window_results else 0}, "
                 f"time={activity.metadata['processing_time_ms']}ms"
             )
-            
+
             return activity
-            
+
         except Exception as e:
             # Create activity entry even if processing fails
             logger.error(f"Processing failed: {e}")
-            
+
             activity = ActivityEntry.create_now(
                 app_name=app_name,
                 window_title=window_title,
@@ -97,7 +120,7 @@ class ActivityProcessor:
                     "processing_time_ms": int((time.time() - start_time) * 1000)
                 }
             )
-            
+
             return activity
     
     def _extract_text(self, screenshot_path: str, metadata: Dict[str, Any]) -> Optional[str]:
@@ -142,6 +165,75 @@ class ActivityProcessor:
             logger.warning(f"OCR failed for {screenshot_path}: {e}")
             return None
     
+    def _extract_window_context(
+        self,
+        screenshot_path: str,
+        focused_pid: Optional[int],
+        metadata: Dict[str, Any],
+    ) -> Optional[List]:
+        """Get visible windows + spatial OCR, returning WindowOCRResult list.
+
+        Returns None if spatial OCR is unavailable or fails, signalling the
+        caller to fall back to basic OCR.
+        """
+        spatial_start = time.time()
+
+        try:
+            from ..capture.windows import get_visible_windows, get_screen_dimensions, QUARTZ_AVAILABLE
+            from .spatial import map_ocr_to_windows
+
+            if not QUARTZ_AVAILABLE:
+                return None
+
+            windows = get_visible_windows()
+            if not windows:
+                return None
+
+            screen_w, screen_h = get_screen_dimensions()
+            if screen_w == 0 or screen_h == 0:
+                return None
+
+            blocks, image_w, image_h = extract_text_blocks(screenshot_path)
+
+            elapsed = time.time() - spatial_start
+            if elapsed > _SPATIAL_TIMEOUT:
+                logger.warning(f"Spatial OCR too slow ({elapsed:.1f}s), aborting")
+                metadata["spatial_ocr_aborted"] = True
+                return None
+
+            results = map_ocr_to_windows(
+                blocks, windows,
+                screen_w=screen_w, screen_h=screen_h,
+                image_w=image_w, image_h=image_h,
+                focused_pid=focused_pid,
+            )
+
+            elapsed = time.time() - spatial_start
+            metadata.update({
+                "spatial_ocr_success": True,
+                "spatial_ocr_time_ms": int(elapsed * 1000),
+                "spatial_window_count": len(windows),
+                "spatial_block_count": len(blocks),
+                "spatial_result_count": len(results),
+                "ocr_backend": "vision_spatial",
+            })
+
+            logger.debug(
+                f"Spatial OCR: {len(blocks)} blocks → {len(results)} window results "
+                f"in {elapsed * 1000:.0f}ms"
+            )
+            return results
+
+        except Exception as e:
+            elapsed = time.time() - spatial_start
+            metadata.update({
+                "spatial_ocr_success": False,
+                "spatial_ocr_error": str(e),
+                "spatial_ocr_time_ms": int(elapsed * 1000),
+            })
+            logger.warning(f"Spatial OCR failed, falling back to basic: {e}")
+            return None
+
     def _classify_activity(
         self,
         app_name: Optional[str],

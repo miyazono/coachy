@@ -77,7 +77,9 @@ class DigestGenerator:
             
             # Generate digest using LLM
             digest_content = self._generate_llm_digest(
-                activity_summary, priorities, persona_content, period
+                activity_summary, priorities, persona_content, period,
+                start_timestamp=start_timestamp,
+                end_timestamp=end_timestamp,
             )
             
             # Store digest in database
@@ -150,22 +152,28 @@ class DigestGenerator:
         activity_summary: Dict[str, Any],
         priorities: Any,
         persona_content: str,
-        period: str
+        period: str,
+        start_timestamp: int = 0,
+        end_timestamp: int = 0,
     ) -> str:
         """Generate digest using LLM.
-        
+
         Args:
             activity_summary: Aggregated activity data
             priorities: Loaded priorities
             persona_content: Persona system prompt
             period: Period type ("day" or "week")
-            
+            start_timestamp: Period start (for window context sampling)
+            end_timestamp: Period end (for window context sampling)
+
         Returns:
             Generated digest content
         """
         # Construct prompt
         prompt = self._construct_digest_prompt(
-            activity_summary, priorities, persona_content, period
+            activity_summary, priorities, persona_content, period,
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp,
         )
         
         # Estimate tokens for budget tracking
@@ -198,22 +206,31 @@ class DigestGenerator:
         activity_summary: Dict[str, Any],
         priorities: Any,
         persona_content: str,
-        period: str
+        period: str,
+        start_timestamp: int = 0,
+        end_timestamp: int = 0,
     ) -> str:
         """Construct the full prompt for digest generation.
-        
+
         Args:
             activity_summary: Activity data
             priorities: User priorities
             persona_content: Persona system prompt
             period: Period type
-            
+            start_timestamp: Period start (for window context)
+            end_timestamp: Period end (for window context)
+
         Returns:
             Complete prompt for LLM
         """
         # Format activity data for prompt with privacy level
         privacy_level = self._privacy_level_override or self.config.privacy_level
-        activity_text = self._format_activity_for_prompt(activity_summary, privacy_level=privacy_level)
+        activity_text = self._format_activity_for_prompt(
+            activity_summary,
+            privacy_level=privacy_level,
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp,
+        )
         
         # Format priorities
         priorities_text = format_priorities_for_llm(priorities)
@@ -249,13 +266,17 @@ Respond in markdown format suitable for display in a terminal."""
     def _format_activity_for_prompt(
         self,
         activity_summary: Dict[str, Any],
-        privacy_level: str = "private"
+        privacy_level: str = "private",
+        start_timestamp: int = 0,
+        end_timestamp: int = 0,
     ) -> str:
         """Format activity summary for inclusion in LLM prompt.
 
         Args:
             activity_summary: Activity data from database
             privacy_level: "private" (categories only) or "detailed" (full context)
+            start_timestamp: Period start (for window context)
+            end_timestamp: Period end (for window context)
 
         Returns:
             Formatted text for prompt
@@ -318,12 +339,109 @@ Respond in markdown format suitable for display in a terminal."""
 **Most Productive Sessions:**
 {chr(10).join(productive_text) if productive_text else "No significant productive sessions"}"""
 
+            # Add workspace context from spatial OCR data
+            if start_timestamp and end_timestamp:
+                workspace_text = self._build_workspace_context(start_timestamp, end_timestamp)
+                if workspace_text:
+                    result += f"\n\n{workspace_text}"
+
         result += f"""
 
 **Active Hours:**
 {', '.join(active_hours) if active_hours else "No significant activity periods"}"""
 
         return result
+
+    def _build_workspace_context(self, start_timestamp: int, end_timestamp: int) -> str:
+        """Build a workspace context section from window metadata samples.
+
+        Analyses spatial OCR data to identify common layouts, focus patterns
+        and reference materials. Returns a concise text block (~100-200 tokens)
+        or empty string if no data is available.
+        """
+        try:
+            samples = self.db.get_window_context_samples(start_timestamp, end_timestamp)
+            if not samples:
+                return ""
+            return self._extract_window_patterns(samples)
+        except Exception as e:
+            logger.debug(f"Workspace context extraction failed: {e}")
+            return ""
+
+    @staticmethod
+    def _extract_window_patterns(samples: list) -> str:
+        """Compute workspace patterns from a list of window-metadata snapshots.
+
+        Args:
+            samples: List of lists, each inner list is metadata["windows"]
+                     from one activity entry.
+
+        Returns:
+            Formatted text for the digest prompt.
+        """
+        from collections import Counter
+
+        layout_counter: Counter = Counter()
+        focus_single_large = 0
+        focus_multi = 0
+        reference_counter: Counter = Counter()
+
+        for snapshot in samples:
+            # Identify layout by sorted set of visible app names
+            app_set = tuple(sorted(set(w.get("app_name", "") for w in snapshot)))
+            layout_counter[app_set] += 1
+
+            # Focus patterns
+            focused = [w for w in snapshot if w.get("focused")]
+            non_focused_count = len(snapshot) - len(focused)
+            if focused and len(focused) == 1:
+                pct = focused[0].get("screen_percentage", 0)
+                if pct >= 50 and non_focused_count == 0:
+                    focus_single_large += 1
+                else:
+                    focus_multi += 1
+            else:
+                focus_multi += 1
+
+            # Track non-focused windows as potential reference materials
+            for w in snapshot:
+                if not w.get("focused") and w.get("app_name"):
+                    title = w.get("window_title", "")
+                    label = f"{w['app_name']}"
+                    if title:
+                        # Use first 40 chars of title for grouping
+                        label += f" ({title[:40]})"
+                    reference_counter[label] += 1
+
+        total = len(samples)
+        if total == 0:
+            return ""
+
+        lines = ["**Workspace Context:**"]
+
+        # Common layouts (top 3)
+        top_layouts = layout_counter.most_common(3)
+        layout_strs = []
+        for apps, count in top_layouts:
+            app_str = " + ".join(apps) if apps else "Desktop"
+            layout_strs.append(f"{app_str} (seen {count}x)")
+        if layout_strs:
+            lines.append(f"- Common layouts: {'; '.join(layout_strs)}")
+
+        # Focus patterns
+        single_pct = int(focus_single_large / total * 100) if total else 0
+        if single_pct > 0:
+            lines.append(f"- Focus patterns: Single large window for {single_pct}% of captures")
+
+        # Reference materials (non-focused windows seen 3+ times)
+        refs = [label for label, count in reference_counter.most_common(5) if count >= 2]
+        if refs:
+            lines.append(f"- Reference materials: {', '.join(refs[:3])}")
+
+        if len(lines) <= 1:
+            return ""
+
+        return "\n".join(lines)
 
 
 def generate_digest(

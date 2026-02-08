@@ -1,7 +1,8 @@
 """Text extraction using macOS Vision framework."""
 import logging
 import pathlib
-from typing import Optional
+from dataclasses import dataclass
+from typing import List, Optional, Tuple
 
 try:
     import Vision
@@ -17,6 +18,14 @@ logger = logging.getLogger(__name__)
 class OCRError(Exception):
     """Exception raised when OCR processing fails."""
     pass
+
+
+@dataclass
+class OCRTextBlock:
+    """A recognized text block with its bounding box."""
+    text: str
+    bbox: Tuple[float, float, float, float]  # normalized Vision coords (0-1, bottom-left origin)
+    confidence: float
 
 
 def extract_text_from_image(image_path: str, max_chars: int = 2000) -> str:
@@ -97,6 +106,96 @@ def extract_text_from_image(image_path: str, max_chars: int = 2000) -> str:
         raise OCRError(f"Text extraction failed: {e}") from e
     finally:
         # Explicit cleanup to help GC in long-running daemon
+        del handler, request, cg_image, image_source
+
+
+def extract_text_blocks(image_path: str, max_blocks: int = 200) -> Tuple[List[OCRTextBlock], int, int]:
+    """Extract text blocks with bounding boxes from an image.
+
+    Uses the same Vision pipeline as extract_text_from_image but preserves
+    the spatial location (boundingBox) and confidence for each observation.
+
+    Args:
+        image_path: Path to image file.
+        max_blocks: Maximum number of text blocks to return.
+
+    Returns:
+        Tuple of (blocks, image_width_px, image_height_px).
+
+    Raises:
+        OCRError: If text extraction fails.
+    """
+    if not VISION_AVAILABLE:
+        raise OCRError("Vision framework not available - macOS 13+ required")
+
+    image_path = pathlib.Path(image_path)
+    if not image_path.exists():
+        raise OCRError(f"Image file not found: {image_path}")
+
+    handler = None
+    request = None
+    cg_image = None
+    image_source = None
+
+    try:
+        image_url = NSURL.fileURLWithPath_(str(image_path))
+
+        image_source = Quartz.CGImageSourceCreateWithURL(image_url, None)
+        if not image_source:
+            raise OCRError("Failed to create image source")
+
+        cg_image = Quartz.CGImageSourceCreateImageAtIndex(image_source, 0, None)
+        if not cg_image:
+            raise OCRError("Failed to create CGImage")
+
+        image_width = Quartz.CGImageGetWidth(cg_image)
+        image_height = Quartz.CGImageGetHeight(cg_image)
+
+        request = Vision.VNRecognizeTextRequest.new()
+        request.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
+        request.setUsesLanguageCorrection_(True)
+
+        handler = Vision.VNImageRequestHandler.alloc().initWithCGImage_options_(cg_image, {})
+        success = handler.performRequests_error_([request], None)
+        if not success[0]:
+            raise OCRError("Vision text recognition failed")
+
+        blocks: List[OCRTextBlock] = []
+        results = request.results()
+
+        if results:
+            for result in results:
+                if not hasattr(result, "text"):
+                    continue
+
+                text = result.text()
+                if not text:
+                    continue
+
+                # boundingBox is a CGRect in normalized Vision coordinates
+                # (origin bottom-left, values 0-1)
+                bb = result.boundingBox()
+                bbox = (
+                    float(bb.origin.x),
+                    float(bb.origin.y),
+                    float(bb.size.width),
+                    float(bb.size.height),
+                )
+                confidence = float(result.confidence())
+
+                blocks.append(OCRTextBlock(text=text, bbox=bbox, confidence=confidence))
+
+                if len(blocks) >= max_blocks:
+                    break
+
+        logger.debug(f"OCR extracted {len(blocks)} text blocks from {image_width}x{image_height} image")
+        return blocks, image_width, image_height
+
+    except OCRError:
+        raise
+    except Exception as e:
+        raise OCRError(f"Text block extraction failed: {e}") from e
+    finally:
         del handler, request, cg_image, image_source
 
 

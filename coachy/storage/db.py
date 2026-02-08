@@ -348,6 +348,67 @@ class Database:
         except sqlite3.Error:
             return []
     
+    def get_window_context_samples(
+        self,
+        start_timestamp: int,
+        end_timestamp: int,
+        sample_size: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Get evenly-spaced activity entries that contain window metadata.
+
+        Args:
+            start_timestamp: Start of period (Unix timestamp).
+            end_timestamp: End of period (Unix timestamp).
+            sample_size: Target number of samples.
+
+        Returns:
+            List of metadata["windows"] lists sampled across the period.
+        """
+        try:
+            conn = self._get_connection()
+            # Fetch entries that have window context
+            cursor = conn.execute(
+                """
+                SELECT metadata FROM activity_log
+                WHERE timestamp >= ? AND timestamp <= ?
+                AND metadata LIKE '%"windows"%'
+                ORDER BY timestamp ASC
+                """,
+                (start_timestamp, end_timestamp),
+            )
+            rows = cursor.fetchall()
+
+            if not rows:
+                return []
+
+            import json
+
+            # Sample evenly across the result set
+            total = len(rows)
+            if total <= sample_size:
+                indices = range(total)
+            else:
+                step = total / sample_size
+                indices = [int(i * step) for i in range(sample_size)]
+
+            samples = []
+            for idx in indices:
+                raw = rows[idx][0]
+                if raw:
+                    try:
+                        meta = json.loads(raw)
+                        windows = meta.get("windows")
+                        if windows:
+                            samples.append(windows)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+
+            return samples
+
+        except sqlite3.Error as e:
+            logger.warning(f"Failed to get window context samples: {e}")
+            return []
+
     def insert_digest(self, digest: DigestEntry) -> int:
         """Insert digest entry into database.
         

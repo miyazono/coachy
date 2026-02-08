@@ -1,7 +1,7 @@
 """Screenshot diff and activity inference based on OCR changes."""
 import logging
 from difflib import SequenceMatcher
-from typing import Optional, Dict, Any
+from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -20,13 +20,15 @@ class ActivityInference:
         self.previous_ocr_text: Optional[str] = None
         self.previous_app_name: Optional[str] = None
         self.previous_window_title: Optional[str] = None
+        self.previous_windows: Optional[List[Dict[str, Any]]] = None
         self.idle_count: int = 0  # Track consecutive idle captures
 
     def analyze(
         self,
         current_ocr_text: Optional[str],
         current_app_name: Optional[str],
-        current_window_title: Optional[str]
+        current_window_title: Optional[str],
+        current_windows: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """Analyze current capture against previous to infer activity.
 
@@ -34,6 +36,8 @@ class ActivityInference:
             current_ocr_text: OCR text from current screenshot
             current_app_name: Current active application
             current_window_title: Current window title
+            current_windows: Optional list of window metadata dicts (from
+                metadata["windows"]) for per-window change detection.
 
         Returns:
             Dictionary with inference results:
@@ -42,6 +46,8 @@ class ActivityInference:
             - change_ratio: how much the screen changed
             - inferred_action: human-readable description
             - is_productive: whether the time should count as productive
+            - per_window_changes: (optional) per-window change info
+            - window_count: (optional) number of visible windows
         """
         result = {
             "activity_type": "unknown",
@@ -57,7 +63,7 @@ class ActivityInference:
             result["activity_type"] = "new_session"
             result["inferred_action"] = "Started new session"
             result["confidence"] = 1.0
-            self._update_previous(current_ocr_text, current_app_name, current_window_title)
+            self._update_previous(current_ocr_text, current_app_name, current_window_title, current_windows)
             return result
 
         # Check for app/window change
@@ -70,14 +76,23 @@ class ActivityInference:
             result["confidence"] = 1.0
             result["change_ratio"] = 1.0
             self.idle_count = 0
-            self._update_previous(current_ocr_text, current_app_name, current_window_title)
+            self._update_previous(current_ocr_text, current_app_name, current_window_title, current_windows)
             return result
 
-        # Compare OCR text
-        change_ratio = self._calculate_change_ratio(
-            self.previous_ocr_text or "",
-            current_ocr_text or ""
-        )
+        # Per-window change detection when available
+        if current_windows and self.previous_windows:
+            pw_result = self._per_window_changes(current_windows, self.previous_windows)
+            change_ratio = pw_result["weighted_change"]
+            result["per_window_changes"] = pw_result["per_window"]
+            result["focused_window_change"] = pw_result.get("focused_change")
+            result["window_count"] = len(current_windows)
+        else:
+            # Fallback to flat OCR comparison
+            change_ratio = self._calculate_change_ratio(
+                self.previous_ocr_text or "",
+                current_ocr_text or ""
+            )
+
         result["change_ratio"] = change_ratio
 
         # Infer activity based on change ratio
@@ -119,8 +134,69 @@ class ActivityInference:
             result["confidence"] = 0.75
             result["is_productive"] = True
 
-        self._update_previous(current_ocr_text, current_app_name, current_window_title)
+        self._update_previous(current_ocr_text, current_app_name, current_window_title, current_windows)
         return result
+
+    def _per_window_changes(
+        self,
+        current_windows: List[Dict[str, Any]],
+        previous_windows: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Compute per-window change ratios between captures.
+
+        Matches windows by (app_name, window_title), falling back to
+        app_name only. Returns a weighted average where the focused window
+        gets 2x weight.
+        """
+        # Index previous windows by (app, title) and (app,)
+        prev_by_key: Dict[tuple, Dict[str, Any]] = {}
+        prev_by_app: Dict[str, Dict[str, Any]] = {}
+        for w in previous_windows:
+            key = (w.get("app_name", ""), w.get("window_title", ""))
+            prev_by_key[key] = w
+            prev_by_app[w.get("app_name", "")] = w
+
+        per_window: List[Dict[str, Any]] = []
+        total_weight = 0.0
+        weighted_sum = 0.0
+        focused_change = None
+
+        for win in current_windows:
+            app = win.get("app_name", "")
+            title = win.get("window_title", "")
+            text = win.get("ocr_text", "")
+            is_focused = win.get("focused", False)
+            pct = win.get("screen_percentage", 0.0)
+
+            # Find matching previous window
+            prev = prev_by_key.get((app, title)) or prev_by_app.get(app)
+            if prev:
+                prev_text = prev.get("ocr_text", "")
+                ratio = self._calculate_change_ratio(prev_text, text)
+            else:
+                ratio = 1.0  # New window = full change
+
+            weight = pct * (2.0 if is_focused else 1.0)
+            weighted_sum += ratio * weight
+            total_weight += weight
+
+            if is_focused:
+                focused_change = ratio
+
+            per_window.append({
+                "app_name": app,
+                "window_title": title,
+                "change_ratio": round(ratio, 3),
+                "focused": is_focused,
+            })
+
+        weighted_change = weighted_sum / total_weight if total_weight > 0 else 0.0
+
+        return {
+            "per_window": per_window,
+            "weighted_change": weighted_change,
+            "focused_change": focused_change,
+        }
 
     def _calculate_change_ratio(self, text1: str, text2: str) -> float:
         """Calculate how much the text changed between captures.
@@ -163,18 +239,21 @@ class ActivityInference:
         self,
         ocr_text: Optional[str],
         app_name: Optional[str],
-        window_title: Optional[str]
+        window_title: Optional[str],
+        windows: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         """Update previous state for next comparison."""
         self.previous_ocr_text = ocr_text
         self.previous_app_name = app_name
         self.previous_window_title = window_title
+        self.previous_windows = windows
 
     def reset(self) -> None:
         """Reset the inference state (e.g., after screen lock)."""
         self.previous_ocr_text = None
         self.previous_app_name = None
         self.previous_window_title = None
+        self.previous_windows = None
         self.idle_count = 0
         logger.debug("Activity inference state reset")
 

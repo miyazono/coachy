@@ -236,7 +236,8 @@ class CaptureDaemon:
                     app_name=window_info.app_name,
                     window_title=window_info.window_title,
                     screenshot_path=screenshot_path,
-                    duration_seconds=self.config.capture_interval
+                    duration_seconds=self.config.capture_interval,
+                    focused_pid=window_info.process_id,
                 )
                 
                 # Add screenshot error to metadata if capture failed
@@ -245,10 +246,12 @@ class CaptureDaemon:
                     activity.metadata.update({"screenshot_error": "Screenshot capture failed"})
 
             # Run activity inference by comparing with previous capture
+            current_windows = (activity.metadata or {}).get("windows")
             inference_result = self.activity_inference.analyze(
                 current_ocr_text=activity.ocr_text,
                 current_app_name=window_info.app_name,
-                current_window_title=window_info.window_title
+                current_window_title=window_info.window_title,
+                current_windows=current_windows,
             )
 
             # Add inference results to activity metadata
