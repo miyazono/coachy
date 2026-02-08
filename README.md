@@ -1,24 +1,23 @@
 # Coachy - Personal Productivity Coach
 
-Coachy is a local-first productivity monitoring and coaching system that helps you understand how you spend your time and provides personalized coaching feedback from different perspectives.
+Coachy is a local-first productivity monitoring and coaching system for macOS. It captures periodic screenshots, extracts activity context using native OCR, and generates coaching digests using configurable AI personas.
 
 ## Features
 
-- 🔒 **Privacy-first**: All screenshots and data stay local - only aggregated summaries go to AI
-- 📸 **Automatic activity tracking**: Captures screenshots and categorizes your work
-- 🤖 **Multiple AI coaches**: Get feedback from different coaching perspectives
-- 📊 **Rich analytics**: Understand your time allocation vs. priorities
-- 🎯 **Priority-driven**: Compare actual time spent against your stated goals
+- **Privacy-first**: All screenshots and OCR stay local. Only aggregated summaries go to the LLM, controlled by configurable privacy levels.
+- **Automatic activity tracking**: Captures screenshots every 60s, classifies your work into 8 categories.
+- **Spatial window-aware OCR**: Maps recognized text to specific visible windows so the system knows what you're actively working on vs. what's in the background.
+- **AI coaching digests**: Get feedback from different coaching perspectives (Andy Grove by default, or add your own).
+- **Priority-driven**: Compare actual time allocation against your stated goals.
 
-## Quick Start
+## Requirements
 
-### Prerequisites
+- **macOS 13+** (Ventura or later) — required for Vision framework OCR and Quartz screenshot capture
+- **Python 3.9+**
+- **Screen Recording permission** — System Settings > Privacy & Security > Screen Recording (grant to Terminal / your terminal app)
+- **Anthropic API key** — for coaching digests (or use a local LLM for fully offline operation)
 
-- macOS 13+ (for screenshot and OCR features)
-- Python 3.9+
-- Anthropic API key for coaching digests
-
-### Installation
+## Installation
 
 1. **Clone the repository:**
 ```bash
@@ -28,9 +27,13 @@ cd coachy
 
 2. **Install dependencies:**
 ```bash
-pip3 install --user anthropic click pyyaml pillow
-# macOS frameworks for screenshots (may require additional setup)
+pip3 install --user anthropic click pyyaml pillow openai
 pip3 install --user pyobjc-framework-Quartz pyobjc-framework-AppKit pyobjc-framework-Vision
+```
+
+Or install everything from `pyproject.toml`:
+```bash
+pip3 install --user -e .
 ```
 
 3. **Set your Anthropic API key:**
@@ -38,9 +41,14 @@ pip3 install --user pyobjc-framework-Quartz pyobjc-framework-AppKit pyobjc-frame
 export ANTHROPIC_API_KEY=your_api_key_here
 ```
 
-### Usage
+4. **First-run setup** (auto-creates `config.yaml` and `priorities.md` from examples):
+```bash
+python3 -m coachy.cli status
+```
 
-**Start tracking your activity:**
+## Usage
+
+**Start tracking:**
 ```bash
 python3 -m coachy.cli start
 ```
@@ -53,6 +61,9 @@ python3 -m coachy.cli status
 **Generate a coaching digest:**
 ```bash
 python3 -m coachy.cli digest
+python3 -m coachy.cli digest --coach grove        # Specific coach
+python3 -m coachy.cli digest --period week         # Weekly digest
+python3 -m coachy.cli digest --privacy detailed    # Include app names and window context
 ```
 
 **Stop tracking:**
@@ -60,133 +71,115 @@ python3 -m coachy.cli digest
 python3 -m coachy.cli stop
 ```
 
-## Daily Workflow
-
-1. **Morning:** Start Coachy when you begin work
-   ```bash
-   python3 -m coachy.cli start
-   ```
-
-2. **During the day:** Work normally - Coachy captures activity every 60 seconds
-
-3. **End of day:** Get coaching feedback
-   ```bash
-   python3 -m coachy.cli digest
-   ```
-
-4. **Try different coaches** for varied perspectives:
-   ```bash
-   python3 -m coachy.cli coaches              # List available coaches
-   python3 -m coachy.cli digest --coach grove  # Use a specific coach
-   ```
-
-## Available Coaches
-
-Run `python3 -m coachy.cli coaches` to see all available coaches.
-
-The default coach is **Andy Grove** (high output management, leverage thinking). You can add custom personas by placing markdown files in `personas/` or `private-personas/` (gitignored) — see `personas/grove.md` for the format.
-
 ## Commands
 
-### Core Operations
-- `start` - Start activity capture
-- `stop` - Stop capture
-- `status` - Check status and statistics
-- `stats` - Show detailed activity breakdown
+| Command | Description |
+|---------|-------------|
+| `start` | Start the capture daemon |
+| `stop` | Stop the capture daemon |
+| `status` | Check status and basic statistics |
+| `stats` | Show detailed activity breakdown |
+| `digest` | Generate coaching digest (`--coach`, `--period`, `--date`, `--privacy`, `--archive`) |
+| `coaches` | List available coaching personas |
+| `priorities` | Edit your priorities file |
+| `configure` | Edit configuration |
+| `categories` | Show activity categories |
+| `cleanup` | Clean old data (`--days N`) |
+| `wipe --confirm` | Delete ALL captured data (screenshots, database, logs) |
+| `test` | Test components (`--test-classifier`, `--test-ocr`) |
 
-### Coaching
-- `digest` - Generate coaching digest (default: Andy Grove, daily)
-- `digest --coach <name>` - Use specific coach
-- `digest --period week` - Weekly digest
-- `coaches` - List available coaching personas
+## Coaches
 
-### Configuration
-- `priorities` - Edit your priorities file
-- `configure` - Edit configuration
-- `categories` - Show activity categories
+Run `python3 -m coachy.cli coaches` to see available coaches.
 
-### Maintenance
-- `cleanup` - Clean old data
-- `test --test-classifier` - Test activity classification
-- `test --test-ocr` - Test OCR functionality
+The default coach is **Andy Grove** (high output management, leverage thinking). Add custom personas by placing markdown files in `personas/` or `private-personas/` (gitignored) — see `personas/grove.md` for the format.
 
 ## Configuration
 
-Edit `config.yaml` to customize:
+On first run, `config.yaml` is created from `config.yaml.example`. Key settings:
 
 ```yaml
 capture:
-  interval_seconds: 60  # How often to capture
-  monitors: "primary"   # Which monitors to capture
-  
+  interval_seconds: 60      # Capture frequency
+  monitors: "primary"       # Which display to capture
+  excluded_apps:             # Apps to skip (no screenshot taken)
+    - "1Password"
+    - "Zoom"
+
 storage:
-  retention_days: 30    # How long to keep screenshots
-  
+  retention_days: 30         # Auto-delete data older than this
+
 coach:
-  default_persona: "grove"  # Default coach
+  default_persona: "grove"
+  privacy_level: "private"   # "private" or "detailed"
 ```
 
-## Privacy & Security
+## Privacy
 
-- **All data stays local** - screenshots never leave your machine
-- **Only summaries sent to AI** - like "2 hours in VS Code, 1 hour email"
-- **Automatic exclusions** - password managers, video calls skipped
-- **30-day retention** - old screenshots auto-deleted
+See [PRIVACY.md](PRIVACY.md) for the full data flow.
+
+**Key points:**
+- Screenshots, OCR text, and window titles **never leave your machine**.
+- The `digest` command sends only an aggregated summary to the LLM API.
+- **`private` mode** (default): sends only category durations and hourly timeline — no app names, window titles, or OCR text.
+- **`detailed` mode**: also includes app names, productive session context, and workspace layout patterns.
+- Use `--privacy` flag to override per-invocation.
+- Set `coach.llm_provider` to `"local"` or `"mlx"` for fully offline operation (zero network calls).
+- All data files are stored with owner-only permissions (`0o600`).
+- No telemetry, no analytics, no update checks.
 
 ## Activity Categories
 
-Coachy automatically categorizes your activities:
+Coachy automatically classifies activities using app name, window title, and OCR text:
 
-- **deep_work**: Coding, writing, research, analysis
-- **communication**: Email, Slack, messaging
-- **meetings**: Video calls (detected but not captured)
-- **research**: Reading, learning, browsing
-- **social_media**: Twitter, LinkedIn, Reddit
-- **administrative**: Calendar, task management
-- **break**: Entertainment, relaxation
-- **unknown**: Uncategorized activity
-
-## Troubleshooting
-
-**"No activity data"**: Make sure capture is running with `coachy status`
-
-**"API key not found"**: Set `export ANTHROPIC_API_KEY=your_key`
-
-**macOS permissions**: Grant screen recording permission in System Preferences → Security & Privacy
-
-**OCR not working**: Requires macOS 13+ with Vision framework
+| Category | Examples |
+|----------|----------|
+| `deep_work` | VS Code, PyCharm, Obsidian |
+| `communication` | Slack, Mail, Messages |
+| `meetings` | Zoom, Meet, Teams (detected but not captured) |
+| `research` | Chrome, Safari, Firefox |
+| `social_media` | Twitter/X, LinkedIn, Reddit |
+| `administrative` | Calendar, Finder, task managers |
+| `break` | YouTube, Spotify, Netflix |
+| `unknown` | Unclassified activity |
 
 ## Architecture
 
-Coachy uses a modular architecture:
+- **Capture**: Screenshots via Quartz, active window via AppKit, visible window enumeration via CGWindowList
+- **Processing**: OCR with Vision framework (flat text + bounding-box spatial mode), rules-based classification, per-window text mapping
+- **Inference**: Screenshot diffing with per-window change detection to identify idle, reading, active work, and context switches
+- **Storage**: SQLite with WAL mode, automatic retention cleanup, JSON metadata
+- **Coaching**: Anthropic Claude API (or local LLM) with configurable personas and privacy levels
 
-- **Capture system**: Screenshots via Quartz, window info via AppKit
-- **Processing pipeline**: OCR with Vision framework, rules-based classification
-- **Storage**: SQLite database with retention policies
-- **Coaching system**: Anthropic Claude API with multiple personas
+## Troubleshooting
+
+**"No activity data"**: Make sure capture is running — check with `python3 -m coachy.cli status`.
+
+**"API key not found"**: Set `export ANTHROPIC_API_KEY=your_key` in your shell profile.
+
+**No screenshots captured**: Grant Screen Recording permission in System Settings > Privacy & Security > Screen Recording. You may need to restart your terminal after granting it.
+
+**OCR not working**: Requires macOS 13+ (Ventura). Check with `python3 -m coachy.cli test --test-ocr`.
 
 ## Development
 
-See [CLAUDE.md](CLAUDE.md) for development documentation.
+See [CLAUDE.md](CLAUDE.md) for detailed development documentation.
 
 Run tests:
 ```bash
-python3 test_basic.py    # Core functionality
-python3 test_phase2.py   # Processing pipeline
-python3 test_phase3.py   # Digest generation
-python3 test_phase4.py   # Coach personas
+python3 test_basic.py                    # Core functionality
+python3 test_phase2.py                   # Processing pipeline
+python3 test_phase3.py                   # Digest generation
+python3 test_phase4.py                   # Coach personas
+python3 -m unittest test_spatial -v      # Spatial OCR (Phase 6)
 ```
 
 ## License
 
-MIT License - see LICENSE file for details
-
-## Contributing
-
-Contributions welcome! Please read CONTRIBUTING.md first.
+MIT License — see [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 
-- Inspired by productivity research from Andy Grove, Cal Newport, and others
-- Built with Claude by Anthropic
-- Uses macOS native frameworks for privacy-preserving capture
+- Built with [Claude](https://anthropic.com/claude) by Anthropic
+- Default coaching persona inspired by Andy Grove's *High Output Management*
+- Uses macOS native frameworks (Vision, Quartz, AppKit) for privacy-preserving capture
