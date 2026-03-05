@@ -6,6 +6,7 @@ from datetime import datetime
 import click
 
 from . import __version__
+from .app_paths import get_config_path, get_priorities_path, get_config_example_path
 from .capture import daemon
 from .config import get_config
 from .storage.db import get_database
@@ -135,7 +136,8 @@ def status():
 @click.option('--date', default=None, help='Specific date (YYYY-MM-DD) or "yesterday"')
 @click.option('--archive', is_flag=True, help='Preserve screenshots after digest (default: delete them)')
 @click.option('--privacy', type=click.Choice(['private', 'detailed']), default=None, help='Privacy level for API prompt (default: from config)')
-def digest(period, persona, date, archive, privacy):
+@click.option('--raw', is_flag=True, help='Show pre-scrub vs post-scrub activity text for debugging')
+def digest(period, persona, date, archive, privacy, raw):
     """Generate a coaching digest.
 
     By default, screenshots are deleted after the digest is generated to save space.
@@ -143,7 +145,10 @@ def digest(period, persona, date, archive, privacy):
 
     Privacy levels control what gets sent to the LLM API:
       private  — categories and time only (no app names or window titles)
-      detailed — full context including app names and window titles
+      detailed — full context with privacy scrubber applied
+
+    The privacy scrubber runs locally to anonymize PII before data is sent to the
+    cloud API. Configure it with: coachy scrubber-prompt
     """
     try:
         # Import here to avoid import issues if dependencies not available
@@ -156,7 +161,7 @@ def digest(period, persona, date, archive, privacy):
             persona = config.get('coach.default_persona', 'grove')
 
         privacy_label = privacy or config.privacy_level
-        click.echo(f"🤖 Generating {period} digest with {persona} coach (privacy: {privacy_label})...")
+        click.echo(f"Generating {period} digest with {persona} coach (privacy: {privacy_label})...")
 
         # Create generator to access time range
         generator = DigestGenerator()
@@ -172,6 +177,21 @@ def digest(period, persona, date, archive, privacy):
             privacy_level=privacy
         )
 
+        # Show raw vs scrubbed if --raw flag
+        if raw and generator._last_raw_text:
+            click.echo("\n" + "="*60)
+            click.echo("PRE-SCRUB (raw activity text):")
+            click.echo("="*60)
+            click.echo(generator._last_raw_text)
+            if generator._last_scrubbed_text and generator._last_scrubbed_text != generator._last_raw_text:
+                click.echo("\n" + "="*60)
+                click.echo("POST-SCRUB (sent to API):")
+                click.echo("="*60)
+                click.echo(generator._last_scrubbed_text)
+            click.echo("\n" + "="*60)
+            click.echo("DIGEST OUTPUT:")
+            click.echo("="*60)
+
         click.echo("\n" + "="*60)
         click.echo(digest_content)
         click.echo("="*60)
@@ -184,16 +204,16 @@ def digest(period, persona, date, archive, privacy):
                 end_timestamp
             )
             if deleted_count > 0:
-                click.echo(f"\n🗑️  Cleaned up {deleted_count} screenshots (use --archive to preserve)")
+                click.echo(f"\nCleaned up {deleted_count} screenshots (use --archive to preserve)")
         else:
-            click.echo(f"\n📦 Screenshots archived (not deleted)")
+            click.echo(f"\nScreenshots archived (not deleted)")
 
     except ImportError as e:
-        click.echo(f"✗ Missing dependencies for digest generation: {e}", err=True)
+        click.echo(f"Missing dependencies for digest generation: {e}", err=True)
         click.echo("   Install with: pip install anthropic", err=True)
         sys.exit(1)
     except Exception as e:
-        click.echo(f"✗ Digest generation failed: {e}", err=True)
+        click.echo(f"Digest generation failed: {e}", err=True)
         sys.exit(1)
 
 
@@ -236,12 +256,13 @@ def _cleanup_screenshots_for_period(screenshots_path: str, start_ts: int, end_ts
 @cli.command()
 def configure():
     """Edit configuration file."""
-    config_path = pathlib.Path("config.yaml")
-    example_path = pathlib.Path("config.yaml.example")
+    config_path = get_config_path()
+    example_path = get_config_example_path()
 
     if not config_path.exists():
         if example_path.exists():
             import shutil
+            config_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(str(example_path), str(config_path))
             click.echo(f"Created {config_path} from {example_path}")
         else:
@@ -255,11 +276,18 @@ def configure():
 @cli.command()
 def priorities():
     """Edit priorities file."""
-    priorities_path = pathlib.Path("priorities.md")
-    
+    priorities_path = get_priorities_path()
+
     if not priorities_path.exists():
-        # Create a default priorities file
-        default_content = """# Coachy Priorities
+        # Try to copy from bundle resources first
+        from .app_paths import get_bundle_resources_dir
+        example_src = get_bundle_resources_dir() / "priorities.md.example"
+        if example_src.exists():
+            import shutil
+            shutil.copy2(str(example_src), str(priorities_path))
+        else:
+            # Create a default priorities file
+            default_content = """# Coachy Priorities
 # Update this file daily or weekly. Your coach compares actual activity against these.
 
 ## This Week's Priorities
@@ -272,11 +300,25 @@ def priorities():
 ## Standing Rules
 - [Add your standing productivity rules]
 """
-        priorities_path.write_text(default_content)
-        click.echo(f"Created default priorities file: {priorities_path}")
-    
+            priorities_path.write_text(default_content)
+        click.echo(f"Created priorities file: {priorities_path}")
+
     click.edit(filename=str(priorities_path))
     click.echo("Priorities updated.")
+
+
+@cli.command(name='scrubber-prompt')
+def scrubber_prompt():
+    """Edit the privacy scrubber prompt.
+
+    The scrubber runs locally before activity data is sent to the cloud LLM.
+    Customize the prompt to control what gets anonymized vs preserved.
+    """
+    from .coach.privacy_scrubber import get_scrubber_prompt_path, _ensure_scrubber_prompt
+
+    prompt_path = _ensure_scrubber_prompt()
+    click.edit(filename=str(prompt_path))
+    click.echo(f"Scrubber prompt updated: {prompt_path}")
 
 
 @cli.command()

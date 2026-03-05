@@ -22,7 +22,7 @@ CATEGORIES = {
     },
     "research": {
         "description": "Reading, learning, information gathering",
-        "signals": ["Arc", "Chrome", "Safari", "Firefox", "PDF Expert", "Preview"]
+        "signals": ["PDF Expert", "Preview"]
     },
     "social_media": {
         "description": "Twitter, LinkedIn, Reddit, etc.",

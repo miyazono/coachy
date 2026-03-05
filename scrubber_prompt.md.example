@@ -1,0 +1,8 @@
+Anonymize the following activity timeline for privacy. Rules:
+- Replace all person names with Person_A, Person_B, Person_C (consistent within the text)
+- Replace email addresses with [email]
+- Replace specific project/company names with Project_X, Project_Y, Org_X
+- Replace URLs with [url]
+- PRESERVE: app names, activity types, durations, time ranges, engagement levels
+- PRESERVE: the structure and meaning of the text
+- Return ONLY the anonymized text, no explanations.

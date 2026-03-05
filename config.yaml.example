@@ -8,13 +8,15 @@ capture:
     - "Bitwarden"
     - "LastPass"
     - "Keychain Access"
-    - "Zoom"
-    - "Google Meet"
-    - "Microsoft Teams"
-    - "Webex"
-    - "FaceTime"
-    - "Slack Huddle"
-    - "Discord"  # when in voice/video
+    # Video call apps are safe to capture — OCR only extracts text, not video/faces.
+    # Uncomment to exclude them if you prefer no capture during calls:
+    # - "Zoom"
+    # - "Google Meet"
+    # - "Microsoft Teams"
+    # - "Webex"
+    # - "FaceTime"
+    # - "Slack Huddle"
+    # - "Discord"
 
   excluded_titles:
     - "private"
@@ -47,6 +49,11 @@ coach:
   mlx:
     model_path: "/path/to/your/mlx/model"
   digest_format: "markdown"
+
+privacy:
+  scrubber_enabled: true          # Enable/disable the privacy scrubber before sending to cloud LLM
+  scrubber_model: "regex"         # "mlx" (local Apple Silicon), "local" (OpenAI-compat), or "regex" (no model needed)
+  scrubber_prompt_path: "scrubber_prompt.md"  # Relative to ~/Library/Application Support/Coachy/
 
 logging:
   level: "INFO"

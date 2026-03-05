@@ -171,10 +171,10 @@ class TestMapOcrToWindows(unittest.TestCase):
         self.assertAlmostEqual(results[0].screen_percentage, 25.0, places=1)
 
     def test_text_truncation(self):
-        """Per-window text is capped at 500 chars."""
+        """Per-window text is capped at 2000 chars."""
         win = self._make_window("App", "Win", 100, (0, 0, 1000, 1000), wid=1)
         # Generate a block with lots of text
-        long_text = "x" * 600
+        long_text = "x" * 2500
         block = self._make_block(long_text, (0.4, 0.4, 0.2, 0.2))
 
         results = map_ocr_to_windows(
@@ -182,7 +182,7 @@ class TestMapOcrToWindows(unittest.TestCase):
             screen_w=1000, screen_h=1000,
             image_w=1000, image_h=1000,
         )
-        self.assertLessEqual(len(results[0].ocr_text), 500)
+        self.assertLessEqual(len(results[0].ocr_text), 2000)
 
     def test_focused_pid_marking(self):
         """focused=True only for window matching focused_pid."""

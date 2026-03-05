@@ -11,6 +11,8 @@ from ..storage.models import DigestEntry
 from .priorities import load_priorities, format_priorities_for_llm
 from .llm import create_llm_client, LLMError, estimate_tokens
 from .personas import load_persona_content, validate_persona_name, list_available_personas
+from .blocks import ActivityBlockBuilder, ActivityBlockFormatter
+from .privacy_scrubber import PrivacyScrubber
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,9 @@ class DigestGenerator:
         self.db = get_database(self.config.db_path)
         self.llm_client = None  # Lazy-loaded
         self._privacy_level_override = None
+        self._scrubber = None  # Lazy-loaded
+        self._last_raw_text = None  # For --raw debug output
+        self._last_scrubbed_text = None
     
     def _get_llm_client(self):
         """Get LLM client, creating it if needed."""
@@ -230,6 +235,7 @@ class DigestGenerator:
             privacy_level=privacy_level,
             start_timestamp=start_timestamp,
             end_timestamp=end_timestamp,
+            period=period,
         )
         
         # Format priorities
@@ -263,20 +269,33 @@ Respond in markdown format suitable for display in a terminal."""
         
         return prompt
     
+    def _get_scrubber(self) -> PrivacyScrubber:
+        """Get privacy scrubber, creating it if needed."""
+        if self._scrubber is None:
+            self._scrubber = PrivacyScrubber(self.config)
+        return self._scrubber
+
     def _format_activity_for_prompt(
         self,
         activity_summary: Dict[str, Any],
         privacy_level: str = "private",
         start_timestamp: int = 0,
         end_timestamp: int = 0,
+        period: str = "day",
     ) -> str:
-        """Format activity summary for inclusion in LLM prompt.
+        """Format activity data for the LLM prompt.
+
+        Uses the new block-based timeline when spatial OCR data is available
+        (detailed/scrubbed modes). Falls back to category-only output when
+        privacy_level is 'private' (kill switch for users who don't trust
+        even local models).
 
         Args:
-            activity_summary: Activity data from database
-            privacy_level: "private" (categories only) or "detailed" (full context)
-            start_timestamp: Period start (for window context)
-            end_timestamp: Period end (for window context)
+            activity_summary: Category-level summary from DB
+            privacy_level: "private" (categories only) or "detailed"
+            start_timestamp: Period start
+            end_timestamp: Period end
+            period: "day" or "week"
 
         Returns:
             Formatted text for prompt
@@ -286,162 +305,66 @@ Respond in markdown format suitable for display in a terminal."""
         if total_minutes == 0:
             return "No activity data available for this period."
 
-        # Category breakdown — always included
+        # -- Category summary (always included as a brief appendix) --
         categories = activity_summary.get("by_category", {})
-        category_text = []
-        for category, data in sorted(categories.items(), key=lambda x: x[1]["minutes"], reverse=True):
-            minutes = data["minutes"]
-            percentage = data["percentage"]
-            category_text.append(f"- {category}: {minutes} minutes ({percentage:.1f}%)")
+        category_lines = []
+        for cat, data in sorted(categories.items(), key=lambda x: x[1]["minutes"], reverse=True):
+            category_lines.append(
+                f"- {cat}: {data['minutes']} min ({data['percentage']:.1f}%)"
+            )
 
-        # Timeline — always included, but detail varies by privacy level
-        timeline = activity_summary.get("timeline", [])
+        category_section = (
+            f"**Category Summary:**\n"
+            + ("\n".join(category_lines) if category_lines else "No categorized activity")
+        )
+
+        # -- Private mode: categories only (kill switch) --
         if privacy_level == "private":
+            timeline = activity_summary.get("timeline", [])
             active_hours = [
-                f"{hour['hour']:02d}:00 ({hour['primary_category']}, {hour['total_minutes']}min)"
-                for hour in timeline
-                if hour["total_minutes"] >= 30
+                f"{h['hour']:02d}:00 ({h['primary_category']}, {h['total_minutes']}min)"
+                for h in timeline if h["total_minutes"] >= 30
             ]
-        else:
-            active_hours = [
-                f"{hour['hour']:02d}:00 ({hour['primary_category']}, {hour['total_minutes']}min)"
-                for hour in timeline
-                if hour["total_minutes"] >= 30
-            ]
+            return (
+                f"**Total Tracked Time:** {total_minutes} min "
+                f"({total_minutes // 60}h {total_minutes % 60}m)\n\n"
+                f"{category_section}\n\n"
+                f"**Active Hours:**\n"
+                f"{', '.join(active_hours) if active_hours else 'No significant activity periods'}"
+            )
 
-        result = f"""**Total Tracked Time:** {total_minutes} minutes ({total_minutes // 60}h {total_minutes % 60}m)
-
-**Time by Category:**
-{chr(10).join(category_text) if category_text else "No categorized activity"}"""
-
-        # Detailed mode: include app names, window titles, productive sessions
-        if privacy_level == "detailed":
-            apps = activity_summary.get("by_app", {})
-            app_text = []
-            for app, data in sorted(apps.items(), key=lambda x: x[1]["minutes"], reverse=True)[:5]:
-                minutes = data["minutes"]
-                category = data["category"]
-                app_text.append(f"- {app}: {minutes} minutes ({category})")
-
-            productive = activity_summary.get("productive_activities", [])
-            productive_text = []
-            for activity in productive[:3]:
-                app = activity["app"]
-                context = activity["context"]
-                minutes = activity["minutes"]
-                productive_text.append(f"- {app} ({context}): {minutes} minutes")
-
-            result += f"""
-
-**Top Applications:**
-{chr(10).join(app_text) if app_text else "No application data"}
-
-**Most Productive Sessions:**
-{chr(10).join(productive_text) if productive_text else "No significant productive sessions"}"""
-
-            # Add workspace context from spatial OCR data
-            if start_timestamp and end_timestamp:
-                workspace_text = self._build_workspace_context(start_timestamp, end_timestamp)
-                if workspace_text:
-                    result += f"\n\n{workspace_text}"
-
-        result += f"""
-
-**Active Hours:**
-{', '.join(active_hours) if active_hours else "No significant activity periods"}"""
-
-        return result
-
-    def _build_workspace_context(self, start_timestamp: int, end_timestamp: int) -> str:
-        """Build a workspace context section from window metadata samples.
-
-        Analyses spatial OCR data to identify common layouts, focus patterns
-        and reference materials. Returns a concise text block (~100-200 tokens)
-        or empty string if no data is available.
-        """
+        # -- Detailed mode: build rich block timeline --
         try:
-            samples = self.db.get_window_context_samples(start_timestamp, end_timestamp)
-            if not samples:
-                return ""
-            return self._extract_window_patterns(samples)
-        except Exception as e:
-            logger.debug(f"Workspace context extraction failed: {e}")
-            return ""
+            rows = self.db.get_activity_metadata_timeline(start_timestamp, end_timestamp)
+            capture_interval = self.config.capture_interval
+            builder = ActivityBlockBuilder(capture_interval=capture_interval)
+            timeline = builder.build_timeline(rows)
 
-    @staticmethod
-    def _extract_window_patterns(samples: list) -> str:
-        """Compute workspace patterns from a list of window-metadata snapshots.
+            raw_text = ActivityBlockFormatter.format_for_prompt(timeline, period=period)
+            self._last_raw_text = raw_text
 
-        Args:
-            samples: List of lists, each inner list is metadata["windows"]
-                     from one activity entry.
-
-        Returns:
-            Formatted text for the digest prompt.
-        """
-        from collections import Counter
-
-        layout_counter: Counter = Counter()
-        focus_single_large = 0
-        focus_multi = 0
-        reference_counter: Counter = Counter()
-
-        for snapshot in samples:
-            # Identify layout by sorted set of visible app names
-            app_set = tuple(sorted(set(w.get("app_name", "") for w in snapshot)))
-            layout_counter[app_set] += 1
-
-            # Focus patterns
-            focused = [w for w in snapshot if w.get("focused")]
-            non_focused_count = len(snapshot) - len(focused)
-            if focused and len(focused) == 1:
-                pct = focused[0].get("screen_percentage", 0)
-                if pct >= 50 and non_focused_count == 0:
-                    focus_single_large += 1
-                else:
-                    focus_multi += 1
+            # Run through privacy scrubber if enabled
+            scrubber_enabled = self.config.get("privacy.scrubber_enabled", True)
+            if scrubber_enabled:
+                scrubber = self._get_scrubber()
+                scrubbed_text = scrubber.scrub(raw_text)
+                self._last_scrubbed_text = scrubbed_text
+                activity_text = scrubbed_text
             else:
-                focus_multi += 1
+                self._last_scrubbed_text = raw_text
+                activity_text = raw_text
 
-            # Track non-focused windows as potential reference materials
-            for w in snapshot:
-                if not w.get("focused") and w.get("app_name"):
-                    title = w.get("window_title", "")
-                    label = f"{w['app_name']}"
-                    if title:
-                        # Use first 40 chars of title for grouping
-                        label += f" ({title[:40]})"
-                    reference_counter[label] += 1
+            # Append brief category summary
+            return f"{activity_text}\n\n{category_section}"
 
-        total = len(samples)
-        if total == 0:
-            return ""
-
-        lines = ["**Workspace Context:**"]
-
-        # Common layouts (top 3)
-        top_layouts = layout_counter.most_common(3)
-        layout_strs = []
-        for apps, count in top_layouts:
-            app_str = " + ".join(apps) if apps else "Desktop"
-            layout_strs.append(f"{app_str} (seen {count}x)")
-        if layout_strs:
-            lines.append(f"- Common layouts: {'; '.join(layout_strs)}")
-
-        # Focus patterns
-        single_pct = int(focus_single_large / total * 100) if total else 0
-        if single_pct > 0:
-            lines.append(f"- Focus patterns: Single large window for {single_pct}% of captures")
-
-        # Reference materials (non-focused windows seen 3+ times)
-        refs = [label for label, count in reference_counter.most_common(5) if count >= 2]
-        if refs:
-            lines.append(f"- Reference materials: {', '.join(refs[:3])}")
-
-        if len(lines) <= 1:
-            return ""
-
-        return "\n".join(lines)
+        except Exception as e:
+            logger.warning(f"Block timeline failed, falling back to category-only: {e}")
+            # Fallback to basic category output
+            return (
+                f"**Total Tracked Time:** {total_minutes} min "
+                f"({total_minutes // 60}h {total_minutes % 60}m)\n\n"
+                f"{category_section}"
+            )
 
 
 def generate_digest(

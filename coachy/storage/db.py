@@ -409,6 +409,63 @@ class Database:
             logger.warning(f"Failed to get window context samples: {e}")
             return []
 
+    def get_activity_metadata_timeline(
+        self,
+        start_timestamp: int,
+        end_timestamp: int,
+    ) -> List[Dict[str, Any]]:
+        """Get activity entries for block building, omitting large ocr_text column.
+
+        Returns lightweight rows with id, timestamp, app_name, window_title,
+        category, duration_seconds, and metadata (which contains per-window OCR).
+
+        Args:
+            start_timestamp: Start time (Unix timestamp)
+            end_timestamp: End time (Unix timestamp)
+
+        Returns:
+            List of row dicts suitable for ActivityBlockBuilder
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.execute(
+                """
+                SELECT id, timestamp, app_name, window_title, category,
+                       duration_seconds, metadata
+                FROM activity_log
+                WHERE timestamp >= ? AND timestamp <= ?
+                ORDER BY timestamp ASC
+                """,
+                (start_timestamp, end_timestamp),
+            )
+            rows = cursor.fetchall()
+
+            import json
+            results = []
+            for row in rows:
+                meta = None
+                raw_meta = row["metadata"]
+                if raw_meta:
+                    try:
+                        meta = json.loads(raw_meta)
+                    except (json.JSONDecodeError, TypeError):
+                        meta = None
+
+                results.append({
+                    "id": row["id"],
+                    "timestamp": row["timestamp"],
+                    "app_name": row["app_name"],
+                    "window_title": row["window_title"],
+                    "category": row["category"],
+                    "duration_seconds": row["duration_seconds"],
+                    "metadata": meta,
+                })
+
+            return results
+
+        except sqlite3.Error as e:
+            raise DatabaseError(f"Failed to query activity timeline: {e}") from e
+
     def insert_digest(self, digest: DigestEntry) -> int:
         """Insert digest entry into database.
         

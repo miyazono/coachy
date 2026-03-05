@@ -9,7 +9,7 @@ from .ocr import OCRTextBlock
 logger = logging.getLogger(__name__)
 
 # Maximum chars of OCR text to store per window
-_MAX_TEXT_PER_WINDOW = 500
+_MAX_TEXT_PER_WINDOW = 2000
 
 
 @dataclass

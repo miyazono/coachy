@@ -52,6 +52,9 @@ class ActivityClassifier:
             logger.warning(f"Unknown classifier backend: {self.backend}")
             return "unknown"
     
+    # Browser app names to detect
+    BROWSER_NAMES = ["chrome", "safari", "firefox", "arc", "edge", "brave", "opera", "vivaldi"]
+
     def _classify_rules(
         self,
         app_name: Optional[str],
@@ -59,39 +62,108 @@ class ActivityClassifier:
         ocr_text: Optional[str] = None
     ) -> str:
         """Classify using rules-based pattern matching.
-        
+
         This is the default, zero-token classification method.
         """
         # Normalize inputs
         app_name = (app_name or "").lower()
         window_title = (window_title or "").lower()
         ocr_text = (ocr_text or "").lower()
-        
-        # 1. First check app name against category signals
+
+        # 1. Detect browsers first — classify by content, not app name
+        if any(browser in app_name for browser in self.BROWSER_NAMES):
+            category = self._classify_browser_content(window_title, ocr_text)
+            logger.debug(f"Browser '{app_name}' classified as {category} by content")
+            return category
+
+        # 2. Check app name against category signals (non-browser apps)
         for category, config in self.categories.items():
             for signal in config["signals"]:
                 if signal.lower() in app_name:
                     logger.debug(f"Classified as {category} based on app: {signal}")
                     return category
-        
-        # 2. Check window title for URL patterns and specific keywords
+
+        # 3. Check window title for URL patterns and specific keywords
         category = self._classify_by_window_title(window_title)
         if category != "unknown":
             return category
-        
-        # 3. Check OCR text for additional signals
+
+        # 4. Check OCR text for additional signals
         if ocr_text:
             category = self._classify_by_ocr_text(ocr_text)
             if category != "unknown":
                 return category
-        
-        # 4. Special application-specific rules
+
+        # 5. Special application-specific rules
         category = self._classify_app_specific_rules(app_name, window_title)
         if category != "unknown":
             return category
-        
+
         logger.debug(f"No classification rule matched for app='{app_name}', window='{window_title}'")
         return "unknown"
+
+    def _classify_browser_content(self, window_title: str, ocr_text: str) -> str:
+        """Classify a browser tab by its window title and OCR content.
+
+        Routes browser activity to the correct category based on what the
+        user is actually doing, not just the app name.
+        """
+        # Social media
+        social_domains = ["twitter.com", "x.com", "linkedin.com", "reddit.com",
+                         "news.ycombinator.com", "facebook.com", "instagram.com"]
+        for domain in social_domains:
+            if domain in window_title or domain in ocr_text:
+                return "social_media"
+
+        # Entertainment/break
+        entertainment_domains = ["youtube.com", "netflix.com", "twitch.tv",
+                                "spotify.com", "apple music"]
+        for domain in entertainment_domains:
+            if domain in window_title or domain in ocr_text:
+                return "break"
+
+        # Communication (webmail, web chat)
+        comm_patterns = ["gmail", "outlook.com", "mail", "slack.com", "discord.com",
+                        "messages", "inbox", "compose", "sent mail"]
+        for pattern in comm_patterns:
+            if pattern in window_title:
+                return "communication"
+
+        # Meetings
+        meeting_patterns = ["zoom.us", "meet.google.com", "teams.microsoft.com"]
+        for pattern in meeting_patterns:
+            if pattern in window_title:
+                return "meetings"
+
+        # Development
+        dev_patterns = ["github.com", "gitlab", "bitbucket", "stack overflow",
+                       "stackoverflow.com", "localhost:", "127.0.0.1"]
+        for pattern in dev_patterns:
+            if pattern in window_title:
+                return "deep_work"
+
+        # Documentation / deep work via content
+        doc_patterns = ["docs.google.com", "notion.so", "confluence", "documentation",
+                       "docs", "overleaf"]
+        for pattern in doc_patterns:
+            if pattern in window_title:
+                return "deep_work"
+
+        # Calendar / admin
+        admin_patterns = ["calendar.google.com", "calendar", "todoist", "asana",
+                         "trello", "jira"]
+        for pattern in admin_patterns:
+            if pattern in window_title:
+                return "administrative"
+
+        # Fall back to OCR text analysis if window title wasn't conclusive
+        if ocr_text:
+            category = self._classify_by_ocr_text(ocr_text)
+            if category != "unknown":
+                return category
+
+        # Default for browsers: research (reading/browsing)
+        return "research"
     
     def _classify_by_window_title(self, window_title: str) -> str:
         """Classify based on window title patterns."""
