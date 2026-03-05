@@ -11,7 +11,7 @@ Coachy is a local-first productivity monitoring and coaching system. It captures
 ## Environment
 - **Python Version**: 3.9.6
 - **Platform**: macOS (required for Vision/Quartz frameworks)
-- **Key Dependencies**: anthropic, click, pyyaml, pyobjc frameworks
+- **Key Dependencies**: anthropic, click, pyyaml, pyobjc frameworks, rumps, keyring
 
 ## File Structure
 ```
@@ -19,9 +19,16 @@ coachy/
 ├── coachy/                    # Main package
 │   ├── __init__.py
 │   ├── cli.py                # Click CLI with all commands
+│   ├── menubar.py            # rumps menu bar app (CoachyApp)
+│   ├── settings_window.py    # Native NSWindow settings panel
+│   ├── app_paths.py          # Centralized path resolution (app dir, bundle resources)
+│   ├── keychain.py           # macOS Keychain API key storage
+│   ├── errors.py             # User-friendly error formatting
+│   ├── permissions.py        # Screen recording permission check
 │   ├── config.py             # YAML configuration management
 │   ├── capture/              # Screenshot & window detection
 │   │   ├── daemon.py         # Background capture process
+│   │   ├── daemon_thread.py  # In-process daemon wrapper for menu bar app
 │   │   ├── screenshot.py     # Quartz-based capture
 │   │   ├── window.py         # AppKit window detection
 │   │   └── windows.py        # CGWindowList visible window enumeration
@@ -52,6 +59,9 @@ coachy/
 ├── priorities.md.example    # Example priorities template
 ├── priorities.md            # User's current priorities (gitignored)
 ├── scrubber_prompt.md.example  # Default privacy scrubber prompt template
+├── setup_app.py             # py2app build script for .app bundle
+├── scripts/
+│   └── build_dmg.sh         # DMG packaging for distribution
 ├── PRIVACY.md               # Data flow and privacy documentation
 └── pyproject.toml           # Dependencies & build config
 ```
@@ -129,9 +139,25 @@ coachy/
 - Config: `privacy.scrubber_enabled`, `privacy.scrubber_model`, `privacy.scrubber_prompt_path`
 - 34 unit tests in `test_blocks.py`
 
+### ✅ Menu Bar App (Complete)
+- **rumps-based menu bar app** (`coachy/menubar.py`): Status bar icon "C" (changes to "C*" when capturing), start/stop capture, generate digests, settings, quit
+- **Native settings window** (`coachy/settings_window.py`): PyObjC NSWindow with API key (Keychain), privacy level, default coach, capture interval, auto-start on login, data management
+- **Settings save is non-destructive**: Merges only managed fields into existing YAML, preserving all other config sections. Falls back to config.yaml.example if file is corrupt/empty.
+- **Digest output**: Saves to `~/Library/Application Support/Coachy/digests/` as timestamped markdown files (e.g., `2026-03-04_143022_daily.md`) and opens in default app
+- **In-process daemon** (`coachy/capture/daemon_thread.py`): DaemonThread wraps CaptureDaemon in a background thread, skipping PID file and signal handlers
+- **Centralized paths** (`coachy/app_paths.py`): All runtime data under `~/Library/Application Support/Coachy/`, detects py2app bundle vs dev mode
+- **API key in Keychain** (`coachy/keychain.py`): Uses keyring library, env var `ANTHROPIC_API_KEY` takes precedence
+- **Screen recording permission check** before starting capture
+- **Packaging**: py2app via `setup_app.py`, DMG via `scripts/build_dmg.sh`
+- **PyObjC gotcha**: `NSPopUpButton.titleOfSelectedItem()` returns NSString, not Python str — must wrap with `str()` before passing to `yaml.safe_dump`
+
 ## CLI Commands
 
-**Core Operations:**
+**Menu Bar App:**
+- `python3 -m coachy.menubar` - Launch menu bar app (replaces CLI daemon)
+- Do NOT run simultaneously with CLI daemon — they share the same DB and screenshots
+
+**Core Operations (CLI):**
 - `python3 -m coachy.cli start` - Start capture daemon
 - `python3 -m coachy.cli stop` - Stop capture daemon
 - `python3 -m coachy.cli status` - Check status & stats

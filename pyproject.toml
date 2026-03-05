@@ -12,6 +12,8 @@ dependencies = [
     "pyobjc-framework-AppKit>=10.0",  # macOS window info
     "pillow>=10.0",         # Image processing
     "openai>=1.0",          # For local LLM (OpenAI-compatible API)
+    "keyring>=25.0",        # macOS Keychain for API key storage
+    "rumps>=0.4.0",         # macOS menu bar app
 ]
 
 [project.optional-dependencies]

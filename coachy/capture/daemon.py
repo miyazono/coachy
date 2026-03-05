@@ -10,6 +10,7 @@ import time
 from datetime import datetime, timedelta
 from multiprocessing import Process
 
+from ..app_paths import get_pid_path
 from ..config import get_config
 from ..storage.db import get_database, DatabaseError
 from ..storage.models import ActivityEntry
@@ -34,14 +35,20 @@ class CaptureDaemon:
     # How often to run auto-cleanup (seconds)
     CLEANUP_INTERVAL = 3600  # 1 hour
 
-    def __init__(self):
-        """Initialize capture daemon."""
+    def __init__(self, in_process: bool = False):
+        """Initialize capture daemon.
+
+        Args:
+            in_process: If True, skip PID file and signal handler registration
+                        (used when running inside the menu bar app thread).
+        """
         self.config = get_config()
         self.db = get_database(self.config.db_path)
         self.processor = create_processor()
         self.activity_inference = ActivityInference()
         self.running = False
-        self.pid_file = pathlib.Path("data/coachy.pid")
+        self.in_process = in_process
+        self.pid_file = get_pid_path()
         self._last_cleanup_time = 0.0
 
         # Set up logging
@@ -288,12 +295,11 @@ class CaptureDaemon:
         # Validate environment before starting
         self._validate_startup()
 
-        # Set up signal handlers for graceful shutdown
-        signal.signal(signal.SIGTERM, self._signal_handler)
-        signal.signal(signal.SIGINT, self._signal_handler)
-
-        # Write PID file
-        self._write_pid_file()
+        if not self.in_process:
+            # Signal handlers only work in the main thread
+            signal.signal(signal.SIGTERM, self._signal_handler)
+            signal.signal(signal.SIGINT, self._signal_handler)
+            self._write_pid_file()
 
         self.running = True
 
@@ -330,7 +336,8 @@ class CaptureDaemon:
         
         finally:
             self.running = False
-            self._remove_pid_file()
+            if not self.in_process:
+                self._remove_pid_file()
             self.db.close()
             logger.info("Coachy capture daemon stopped")
 
@@ -343,7 +350,7 @@ def _run_daemon_process():
 
 def start_daemon() -> None:
     """Start the capture daemon as a background process."""
-    pid_file = pathlib.Path("data/coachy.pid")
+    pid_file = get_pid_path()
     
     # Check if daemon is already running
     if pid_file.exists():
@@ -377,7 +384,7 @@ def start_daemon() -> None:
 
 def stop_daemon() -> None:
     """Stop the capture daemon."""
-    pid_file = pathlib.Path("data/coachy.pid")
+    pid_file = get_pid_path()
     
     if not pid_file.exists():
         raise RuntimeError("Daemon not running (no PID file found)")
@@ -418,8 +425,8 @@ def get_daemon_status() -> dict:
     Returns:
         Dictionary with daemon status information
     """
-    pid_file = pathlib.Path("data/coachy.pid")
-    
+    pid_file = get_pid_path()
+
     if not pid_file.exists():
         return {"running": False, "pid": None}
     

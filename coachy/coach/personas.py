@@ -3,6 +3,8 @@ import logging
 import pathlib
 from typing import Dict, List, Optional
 
+from ..app_paths import get_personas_dir, get_private_personas_dir
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,14 +45,19 @@ class Persona:
 class PersonaManager:
     """Manages loading and access to coaching personas."""
     
-    def __init__(self, personas_dir: str = "personas"):
+    def __init__(self, personas_dir: str = None):
         """Initialize persona manager.
 
         Args:
             personas_dir: Directory containing persona markdown files
+                          (default: app_paths location)
         """
-        self.personas_dir = pathlib.Path(personas_dir)
-        self.private_personas_dir = self.personas_dir.parent / "private-personas"
+        if personas_dir is None:
+            self.personas_dir = get_personas_dir()
+            self.private_personas_dir = get_private_personas_dir()
+        else:
+            self.personas_dir = pathlib.Path(personas_dir)
+            self.private_personas_dir = self.personas_dir.parent / "private-personas"
         self._personas = {}
         self._load_all_personas()
     
@@ -188,7 +195,7 @@ _persona_manager = None
 
 def get_persona_manager() -> PersonaManager:
     """Get the global persona manager instance.
-    
+
     Returns:
         PersonaManager instance
     """
@@ -196,6 +203,15 @@ def get_persona_manager() -> PersonaManager:
     if _persona_manager is None:
         _persona_manager = PersonaManager()
     return _persona_manager
+
+
+def reset_persona_manager() -> None:
+    """Reset the global persona manager instance.
+
+    Call after copying persona files so the next access re-scans the directory.
+    """
+    global _persona_manager
+    _persona_manager = None
 
 
 def list_available_personas() -> List[str]:

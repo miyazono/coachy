@@ -56,9 +56,13 @@ class AnthropicClient(LLMClient):
         
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
         if not self.api_key:
+            # Fall back to macOS Keychain
+            from ..keychain import get_api_key as _get_keychain_key
+            self.api_key = _get_keychain_key()
+        if not self.api_key:
             raise LLMError(
-                "Anthropic API key not found. Set ANTHROPIC_API_KEY environment variable "
-                "or pass api_key parameter"
+                "Anthropic API key not found. Set it in Settings (Keychain), "
+                "or set the ANTHROPIC_API_KEY environment variable"
             )
         
         self.model = model

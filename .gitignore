@@ -32,3 +32,8 @@ venv/
 
 # Private personas (may reference living people)
 private-personas/
+
+# py2app build artifacts
+build/
+dist/
+.buildenv/
