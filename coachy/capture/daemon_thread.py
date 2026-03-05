@@ -24,6 +24,7 @@ class DaemonThread:
         """
         self._thread: Optional[threading.Thread] = None
         self._daemon: Optional[CaptureDaemon] = None
+        self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._on_error = on_error
         self._last_error: Optional[Exception] = None
@@ -40,7 +41,10 @@ class DaemonThread:
                 raise RuntimeError("Daemon thread is already running")
 
             self._last_error = None
-            self._daemon = CaptureDaemon(in_process=True)
+            self._stop_event.clear()
+            self._daemon = CaptureDaemon(
+                in_process=True, stop_event=self._stop_event,
+            )
             self._thread = threading.Thread(
                 target=self._run,
                 name="coachy-daemon",
@@ -54,6 +58,8 @@ class DaemonThread:
         Args:
             timeout: Maximum seconds to wait for the thread to exit.
         """
+        # Signal stop via event (interrupts sleep immediately)
+        self._stop_event.set()
         with self._lock:
             if self._daemon is not None:
                 self._daemon.running = False

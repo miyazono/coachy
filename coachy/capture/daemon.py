@@ -35,12 +35,14 @@ class CaptureDaemon:
     # How often to run auto-cleanup (seconds)
     CLEANUP_INTERVAL = 3600  # 1 hour
 
-    def __init__(self, in_process: bool = False):
+    def __init__(self, in_process: bool = False, stop_event=None):
         """Initialize capture daemon.
 
         Args:
             in_process: If True, skip PID file and signal handler registration
                         (used when running inside the menu bar app thread).
+            stop_event: Optional threading.Event that, when set, signals the
+                        daemon to stop. Used by DaemonThread for fast shutdown.
         """
         self.config = get_config()
         self.db = get_database(self.config.db_path)
@@ -48,6 +50,7 @@ class CaptureDaemon:
         self.activity_inference = ActivityInference()
         self.running = False
         self.in_process = in_process
+        self._stop_event = stop_event
         self.pid_file = get_pid_path()
         self._last_cleanup_time = 0.0
 
@@ -315,12 +318,17 @@ class CaptureDaemon:
                 # Perform capture cycle
                 self._capture_cycle()
                 
-                # Sleep for remaining interval time
+                # Sleep for remaining interval time (interruptible via stop_event)
                 cycle_duration = time.time() - cycle_start
                 sleep_time = max(0, self.config.capture_interval - cycle_duration)
-                
+
                 if sleep_time > 0:
-                    time.sleep(sleep_time)
+                    if self._stop_event is not None:
+                        # Interruptible sleep — returns immediately when event is set
+                        if self._stop_event.wait(timeout=sleep_time):
+                            break  # stop was requested
+                    else:
+                        time.sleep(sleep_time)
                 else:
                     logger.warning(
                         f"Capture cycle took {cycle_duration:.1f}s, "
@@ -338,7 +346,9 @@ class CaptureDaemon:
             self.running = False
             if not self.in_process:
                 self._remove_pid_file()
-            self.db.close()
+                self.db.close()
+            # In-process mode: don't close the DB singleton — it's shared
+            # and will be reused on next start.
             logger.info("Coachy capture daemon stopped")
 
 
