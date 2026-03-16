@@ -106,13 +106,13 @@ class DigestGenerator:
             logger.error(f"Digest generation failed: {e}")
             raise DigestError(f"Failed to generate digest: {e}") from e
     
-    def _get_time_range(self, period: str, date: Optional[str] = None) -> tuple[int, int]:
+    def _get_time_range(self, period: str, date: Optional[str] = None) -> "tuple[int, int]":
         """Get start and end timestamps for the specified period.
-        
+
         Args:
-            period: "day" or "week"
+            period: "day", "week", "week_current", or "week_previous"
             date: Specific date or None for most recent
-            
+
         Returns:
             Tuple of (start_timestamp, end_timestamp)
         """
@@ -126,29 +126,40 @@ class DigestGenerator:
                     raise DigestError(f"Invalid date format: {date}. Use YYYY-MM-DD or 'yesterday'")
         else:
             target_date = datetime.now()
-        
+
         if period == "day":
             # Day: midnight to midnight
             start_of_day = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
             end_of_day = start_of_day + timedelta(days=1)
-            
+
             start_timestamp = int(start_of_day.timestamp())
             end_timestamp = int(end_of_day.timestamp())
-            
-        elif period == "week":
-            # Week: Monday to Sunday
+
+        elif period in ("week", "week_current"):
+            # Current week: Monday 00:00 to now
             days_since_monday = target_date.weekday()
             start_of_week = (target_date - timedelta(days=days_since_monday)).replace(
                 hour=0, minute=0, second=0, microsecond=0
             )
             end_of_week = start_of_week + timedelta(days=7)
-            
+
             start_timestamp = int(start_of_week.timestamp())
             end_timestamp = int(end_of_week.timestamp())
-            
+
+        elif period == "week_previous":
+            # Previous completed week: last Monday 00:00 to last Sunday 23:59
+            days_since_monday = target_date.weekday()
+            this_monday = (target_date - timedelta(days=days_since_monday)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            last_monday = this_monday - timedelta(days=7)
+
+            start_timestamp = int(last_monday.timestamp())
+            end_timestamp = int(this_monday.timestamp())
+
         else:
             raise DigestError(f"Unsupported period: {period}")
-        
+
         return start_timestamp, end_timestamp
     
     
@@ -242,7 +253,12 @@ class DigestGenerator:
         priorities_text = format_priorities_for_llm(priorities)
         
         # Determine period description
-        period_desc = "daily" if period == "day" else "weekly"
+        period_desc = {
+            "day": "daily",
+            "week": "weekly",
+            "week_current": "weekly (this week so far)",
+            "week_previous": "weekly (last week review)",
+        }.get(period, "weekly")
         
         prompt = f"""I need you to analyze my productivity data and provide coaching feedback.
 

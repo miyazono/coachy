@@ -5,9 +5,10 @@ and menu, and ``DaemonThread`` for in-process screen capture.
 """
 import logging
 import threading
-from datetime import datetime
 
 import rumps
+
+from datetime import datetime, timedelta
 
 from .app_paths import get_config_path, get_app_dir
 from .capture.daemon_thread import DaemonThread
@@ -38,7 +39,8 @@ class CoachyApp(rumps.App):
         self._toggle_item = rumps.MenuItem("Start Capture", callback=self._toggle_capture)
         self._digest_menu = rumps.MenuItem("Generate Digest")
         self._digest_menu.add(rumps.MenuItem("Daily Digest", callback=self._daily_digest))
-        self._digest_menu.add(rumps.MenuItem("Weekly Digest", callback=self._weekly_digest))
+        self._digest_menu.add(rumps.MenuItem("This Week So Far", callback=self._week_current_digest))
+        self._digest_menu.add(rumps.MenuItem("Last Week Review", callback=self._week_previous_digest))
         self._digest_menu.add(rumps.separator)
         self._coach_label = rumps.MenuItem("Coach: grove")
         self._coach_label.set_callback(None)
@@ -65,6 +67,10 @@ class CoachyApp(rumps.App):
         # Status polling timer
         self._timer = rumps.Timer(self._poll_status, STATUS_POLL_INTERVAL)
         self._timer.start()
+
+        # One-shot catch-up check for missed weekly digest (5s delay)
+        self._catchup_timer = rumps.Timer(self._startup_catchup, 5)
+        self._catchup_timer.start()
 
         # Settings window controller (lazy)
         self._settings_controller = None
@@ -148,11 +154,39 @@ class CoachyApp(rumps.App):
     def _daily_digest(self, _sender):
         self._run_digest("day")
 
-    def _weekly_digest(self, _sender):
-        self._run_digest("week")
+    def _week_current_digest(self, _sender):
+        self._run_digest("week_current")
+
+    def _week_previous_digest(self, _sender):
+        self._run_digest("week_previous")
 
     def _run_digest(self, period: str):
         """Generate a digest in a background thread, save to file, and open it."""
+        # Show generating state
+        self._saved_title = self.title
+        self.title = "C\u2026"  # "C…" — ellipsis indicates work in progress
+        self._status_item.title = "Status: Generating digest\u2026"
+        for item in self._digest_menu.values():
+            if hasattr(item, 'set_callback'):
+                item.set_callback(None)
+
+        def _restore_menu():
+            """Re-enable digest menu items and restore title."""
+            self.title = self._saved_title
+            if self._daemon.is_running():
+                self._status_item.title = "Status: Running"
+            else:
+                self._status_item.title = "Status: Stopped"
+            # Re-bind callbacks (skip separator and coach label)
+            cb_map = {
+                "Daily Digest": self._daily_digest,
+                "This Week So Far": self._week_current_digest,
+                "Last Week Review": self._week_previous_digest,
+            }
+            for key, item in self._digest_menu.items():
+                if key in cb_map:
+                    item.set_callback(cb_map[key])
+
         def _work():
             try:
                 import subprocess
@@ -175,14 +209,21 @@ class CoachyApp(rumps.App):
                 # Open in default app
                 subprocess.Popen(["open", str(filepath)])
 
+                label = {
+                    "day": "Daily",
+                    "week_current": "This week",
+                    "week_previous": "Last week",
+                }.get(period, period.title())
                 rumps.notification(
                     title="Coachy Digest",
-                    subtitle=f"{period.title()} digest ready",
+                    subtitle=f"{label} digest ready",
                     message=f"Saved to {filename}",
                 )
 
             except Exception as exc:
                 rumps.notification("Coachy", "Digest failed", friendly_error(exc))
+            finally:
+                _restore_menu()
 
         t = threading.Thread(target=_work, name="coachy-digest", daemon=True)
         t.start()
@@ -229,6 +270,44 @@ class CoachyApp(rumps.App):
     def _on_daemon_error(self, exc: Exception):
         """Called from the daemon thread when it crashes."""
         rumps.notification("Coachy", "Capture stopped", friendly_error(exc))
+
+    # ---- startup catch-up ----
+
+    def _startup_catchup(self, timer):
+        """One-shot check for missed weekly digest on startup."""
+        timer.stop()
+        try:
+            now = datetime.now()
+            days_since_monday = now.weekday()
+            this_monday = (now - timedelta(days=days_since_monday)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            last_monday = this_monday - timedelta(days=7)
+            last_monday_ts = int(last_monday.timestamp())
+            this_monday_ts = int(this_monday.timestamp())
+
+            config = get_config()
+            db = get_database(config.db_path)
+
+            # Already have a digest for last week?
+            if db.has_digest_for_period(last_monday_ts, ["week", "week_previous"]):
+                return
+
+            # Any data to summarize?
+            summary = db.get_activity_summary(last_monday_ts, this_monday_ts)
+            if summary.get("total_tracked_minutes", 0) == 0:
+                return
+
+            rumps.notification(
+                title="Coachy",
+                subtitle="Last week review available",
+                message=(
+                    "You haven't generated a digest for last week yet. "
+                    "Use Generate Digest > Last Week Review."
+                ),
+            )
+        except Exception:
+            pass  # never crash startup
 
 
 def main():

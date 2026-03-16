@@ -9,7 +9,7 @@ dependencies = [
     "anthropic>=0.40",      # Anthropic API client
     "pyobjc-framework-Quartz>=10.0",  # macOS screenshots
     "pyobjc-framework-Vision>=10.0",  # macOS OCR
-    "pyobjc-framework-AppKit>=10.0",  # macOS window info
+    "pyobjc-framework-Cocoa>=10.0",  # macOS AppKit/Foundation
     "pillow>=10.0",         # Image processing
     "openai>=1.0",          # For local LLM (OpenAI-compatible API)
     "keyring>=25.0",        # macOS Keychain for API key storage
@@ -27,6 +27,9 @@ dev = [
 
 [project.scripts]
 coachy = "coachy.cli:cli"
+
+[tool.setuptools.packages.find]
+include = ["coachy*"]
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]

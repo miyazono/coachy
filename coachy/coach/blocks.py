@@ -887,6 +887,13 @@ class ActivityBlockFormatter:
         if not timeline.blocks:
             return "No activity data available for this period."
 
+        is_weekly = period in ("week", "week_current", "week_previous")
+
+        # For weekly digests, drop OCR to stay within context limits.
+        # A full week of OCR easily exceeds 200k tokens.
+        if is_weekly:
+            include_ocr = False
+
         lines = []
 
         # Header
@@ -908,9 +915,9 @@ class ActivityBlockFormatter:
             lines.append(f"**Top Apps:** {', '.join(app_parts)}")
             lines.append("")
 
-        # Filter for weekly
+        # Filter for weekly — drop very short blocks
         blocks = timeline.blocks
-        if period == "week":
+        if is_weekly:
             blocks = [b for b in blocks if b.duration_minutes >= 5]
 
         # Group blocks into runs: consecutive short blocks on same app get compressed

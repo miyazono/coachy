@@ -131,7 +131,7 @@ def status():
 
 
 @cli.command()
-@click.option('--period', type=click.Choice(['day', 'week']), default='day', help='Period for digest (day or week)')
+@click.option('--period', type=click.Choice(['day', 'week', 'week_current', 'week_previous']), default='day', help='Period for digest')
 @click.option('--coach', 'persona', default=None, help='Coach persona to use (default: grove)')
 @click.option('--date', default=None, help='Specific date (YYYY-MM-DD) or "yesterday"')
 @click.option('--archive', is_flag=True, help='Preserve screenshots after digest (default: delete them)')

@@ -526,6 +526,27 @@ class Database:
         except sqlite3.Error as e:
             raise DatabaseError(f"Failed to get latest digest: {e}") from e
     
+    def has_digest_for_period(self, period_start: int, period_types: List[str]) -> bool:
+        """Check if a digest exists for a given period start and any of the listed types.
+
+        Args:
+            period_start: Unix timestamp of the period start (e.g. Monday 00:00)
+            period_types: List of period_type strings to match
+
+        Returns:
+            True if a matching digest exists
+        """
+        try:
+            placeholders = ",".join("?" for _ in period_types)
+            conn = self._get_connection()
+            cursor = conn.execute(
+                f"SELECT 1 FROM digests WHERE period_start = ? AND period_type IN ({placeholders}) LIMIT 1",
+                [period_start] + period_types,
+            )
+            return cursor.fetchone() is not None
+        except sqlite3.Error:
+            return False
+
     def cleanup_old_activities(self, older_than_timestamp: int) -> int:
         """Delete activity entries older than specified timestamp.
         
