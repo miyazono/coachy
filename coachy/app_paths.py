@@ -106,3 +106,15 @@ def get_bundle_resources_dir() -> pathlib.Path:
     else:
         # Dev mode: project root is one level up from coachy/ package
         return pathlib.Path(__file__).parent.parent
+
+
+def get_icons_dir() -> pathlib.Path:
+    """Return the directory containing menu bar and app icons.
+
+    In dev mode, this is assets/icons/ in the project root.
+    In a .app bundle, icons are copied into Resources/icons/.
+    """
+    if _is_frozen():
+        return get_bundle_resources_dir() / "icons"
+    else:
+        return get_bundle_resources_dir() / "assets" / "icons"

@@ -10,7 +10,7 @@ import rumps
 
 from datetime import datetime, timedelta
 
-from .app_paths import get_config_path, get_app_dir
+from .app_paths import get_config_path, get_app_dir, get_icons_dir
 from .capture.daemon_thread import DaemonThread
 from .config import get_config, reset_config
 from .errors import friendly_error
@@ -25,11 +25,30 @@ STATUS_POLL_INTERVAL = 10
 class CoachyApp(rumps.App):
     """Menu bar application for Coachy."""
 
+    # Menu bar icon paths (keyed by state)
+    _ICON_NAMES = {
+        "idle": "idle_16.png",
+        "capturing": "capturing_16.png",
+        "generating": "generating_16.png",
+        "error": "error_16.png",
+    }
+
     def __init__(self):
+        # Resolve icon paths
+        icons_dir = get_icons_dir()
+        self._icons = {}
+        for state, filename in self._ICON_NAMES.items():
+            path = icons_dir / filename
+            if path.exists():
+                self._icons[state] = str(path)
+
+        icon_path = self._icons.get("idle")
         super().__init__(
             name="Coachy",
-            title="C",
+            title=None if icon_path else "C",
+            icon=icon_path,
             quit_button=None,  # we supply our own so we can clean up
+            template=True,  # macOS template image — adapts to light/dark menu bar
         )
 
         # Daemon
@@ -74,6 +93,18 @@ class CoachyApp(rumps.App):
 
         # Settings window controller (lazy)
         self._settings_controller = None
+
+    def _set_icon_state(self, state: str):
+        """Update the menu bar icon to reflect the given state."""
+        icon_path = self._icons.get(state)
+        if icon_path:
+            self.icon = icon_path
+            self.title = None
+        else:
+            # Fallback to text if icon not found
+            fallback = {"idle": "C", "capturing": "C*", "generating": "C\u2026", "error": "C!"}
+            self.title = fallback.get(state, "C")
+            self.icon = None
 
     # ---- first-run ----
 
@@ -126,7 +157,7 @@ class CoachyApp(rumps.App):
             if self._daemon.is_running():
                 self._daemon.stop()
                 sender.title = "Start Capture"
-                self.title = "C"
+                self._set_icon_state("idle")
                 self._status_item.title = "Status: Stopped"
             else:
                 # Check screen recording permission first
@@ -146,7 +177,7 @@ class CoachyApp(rumps.App):
                 reset_config()  # re-read config in case user changed it
                 self._daemon.start()
                 sender.title = "Stop Capture"
-                self.title = "C*"
+                self._set_icon_state("capturing")
                 self._status_item.title = "Status: Running"
         except Exception as exc:
             rumps.notification("Coachy", "Error", friendly_error(exc))
@@ -163,16 +194,16 @@ class CoachyApp(rumps.App):
     def _run_digest(self, period: str):
         """Generate a digest in a background thread, save to file, and open it."""
         # Show generating state
-        self._saved_title = self.title
-        self.title = "C\u2026"  # "C…" — ellipsis indicates work in progress
+        self._saved_icon_state = "capturing" if self._daemon.is_running() else "idle"
+        self._set_icon_state("generating")
         self._status_item.title = "Status: Generating digest\u2026"
         for item in self._digest_menu.values():
             if hasattr(item, 'set_callback'):
                 item.set_callback(None)
 
         def _restore_menu():
-            """Re-enable digest menu items and restore title."""
-            self.title = self._saved_title
+            """Re-enable digest menu items and restore icon state."""
+            self._set_icon_state(self._saved_icon_state)
             if self._daemon.is_running():
                 self._status_item.title = "Status: Running"
             else:
@@ -312,6 +343,13 @@ class CoachyApp(rumps.App):
 
 def main():
     """Entry point for the menu bar app."""
+    # Force accessory activation policy — without this the python interpreter
+    # launches as a regular app (since its main bundle is org.python.python,
+    # not com.coachy.app, so the .app's LSUIElement is ignored), and the
+    # NSStatusBarWindow gets collapsed to height=0.
+    from AppKit import NSApplication
+    NSApplication.sharedApplication().setActivationPolicy_(1)  # Accessory
+
     app = CoachyApp()
 
     # First-run check
